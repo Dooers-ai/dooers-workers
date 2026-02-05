@@ -208,3 +208,42 @@ worker_server = WorkerServer(WorkerConfig(
 - `EMAIL` - Email input
 - `DATE` - Date picker
 - `IMAGE` - Display-only image (e.g., QR codes)
+
+## Publishing to PyPI
+
+This package uses GitHub Actions with PyPI Trusted Publisher for automated releases.
+
+### Creating a Release
+
+1. **Update the version** in `pyproject.toml`:
+
+   ```toml
+   [project]
+   version = "0.2.0"
+   ```
+
+2. **Commit and push** your changes:
+
+   ```bash
+   git add pyproject.toml
+   git commit -m "Bump version to 0.2.0"
+   git push
+   ```
+
+3. **Create a GitHub Release**:
+   - Go to your repository on GitHub
+   - Click **Releases** → **Draft a new release**
+   - Click **Choose a tag** → type `v0.2.0` → **Create new tag**
+   - Set **Release title** (e.g., `v0.2.0`)
+   - Add release notes describing changes
+   - Click **Publish release**
+
+4. The GitHub Action will automatically build and publish to PyPI.
+
+### Manual Build (optional)
+
+```bash
+uv build
+```
+
+This creates `dist/dooers-X.Y.Z.tar.gz` and `dist/dooers-X.Y.Z-py3-none-any.whl`.
