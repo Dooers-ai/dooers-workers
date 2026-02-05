@@ -1,8 +1,9 @@
 import logging
 
-from dooers.analytics.collector import AnalyticsCollector
 from dooers.broadcast import BroadcastManager
 from dooers.config import WorkerConfig
+from dooers.features.analytics.collector import AnalyticsCollector
+from dooers.features.settings.broadcaster import SettingsBroadcaster
 from dooers.handlers.router import Handler, Router, WebSocketProtocol
 from dooers.persistence.base import Persistence
 from dooers.persistence.postgres import PostgresPersistence
@@ -14,7 +15,6 @@ from dooers.settings import (
     ANALYTICS_FLUSH_INTERVAL,
     ANALYTICS_WEBHOOK_URL,
 )
-from dooers.settings_module.broadcaster import SettingsBroadcaster
 
 logger = logging.getLogger(__name__)
 
