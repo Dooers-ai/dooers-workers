@@ -1,9 +1,24 @@
 [project]
 name = "dooers-workers"
-version = "0.2.0"
-description = "Python SDK for dooers.ai chat protocol"
+version = "0.2.1"
+description = "dooers.ai SDK for creating agent workers"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+authors = [
+    { name = "dooers.ai", email = "contact@dooers.ai" }
+]
+keywords = ["ai", "agents", "sdk", "dooers", "workers", "multi-agent"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
 dependencies = [
     "pydantic>=2.12.5",
     "sqlalchemy>=2.0.46",
@@ -18,6 +33,11 @@ dev = [
     "pytest-asyncio>=1.3.0",
     "ruff>=0.15.0",
 ]
+
+[project.urls]
+Homepage = "https://dooers.ai"
+Repository = "https://github.com/Dooers-ai/dooers-workers"
+Documentation = "https://github.com/Dooers-ai/dooers-workers"
 
 [build-system]
 requires = ["hatchling"]

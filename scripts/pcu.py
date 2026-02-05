@@ -12,10 +12,14 @@ from pathlib import Path
 try:
     import tomllib
 except ImportError:
-    import tomli as tomllib
+    try:
+        import tomli as tomllib
+    except ImportError:
+        tomllib = None
 
 
 PYPROJECT_PATH = Path("pyproject.toml")
+REQUIREMENTS_PATH = Path("requirements.txt")
 
 # ANSI colors
 GREEN = "\033[32m"
@@ -32,6 +36,9 @@ def run_command(cmd: str, capture: bool = True) -> tuple[int, str, str]:
 
 
 def load_pyproject() -> dict:
+    if tomllib is None:
+        print(f"  {RED}Cannot read pyproject.toml: tomllib/tomli not available.{RESET}")
+        sys.exit(1)
     content = PYPROJECT_PATH.read_text()
     return tomllib.loads(content)
 
@@ -106,9 +113,33 @@ def get_all_dependencies(pyproject: dict) -> list[dict]:
     return deps
 
 
+def get_deps_from_requirements() -> list[dict]:
+    """Parse dependencies from requirements.txt."""
+    deps = []
+    for line in REQUIREMENTS_PATH.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or line.startswith("-"):
+            continue
+        name, extras, op, version = parse_dependency(line)
+        if name:
+            deps.append(
+                {
+                    "name": name,
+                    "extras": extras,
+                    "operator": op,
+                    "version": version,
+                    "group": "main",
+                    "raw": line,
+                }
+            )
+    return deps
+
+
 def get_installed_versions() -> dict[str, str]:
-    """Get currently installed package versions via uv pip list."""
+    """Get currently installed package versions via uv pip list or pip list."""
     code, stdout, _ = run_command("uv pip list --format=json")
+    if code != 0:
+        code, stdout, _ = run_command("pip list --format=json")
     if code != 0:
         return {}
     try:
@@ -152,16 +183,32 @@ def is_outdated(pinned: str, latest: str) -> bool:
     return version_tuple(pinned) < version_tuple(latest)
 
 
+def detect_sources() -> tuple[bool, bool]:
+    """Detect available dependency sources. Returns (has_pyproject, has_requirements)."""
+    return PYPROJECT_PATH.exists(), REQUIREMENTS_PATH.exists()
+
+
 def cmd_check():
     print(f"\n{BOLD}Python Check Updates{RESET}")
-    print(f"{DIM}Checking dependencies in pyproject.toml...{RESET}\n")
 
-    pyproject = load_pyproject()
-    deps = get_all_dependencies(pyproject)
+    has_pyproject, has_requirements = detect_sources()
+
+    if not has_pyproject and not has_requirements:
+        print(f"\n  {RED}No pyproject.toml or requirements.txt found.{RESET}\n")
+        sys.exit(1)
+
+    if has_pyproject:
+        print(f"{DIM}Checking dependencies in pyproject.toml...{RESET}\n")
+        pyproject = load_pyproject()
+        deps = get_all_dependencies(pyproject)
+    else:
+        print(f"{DIM}Checking dependencies in requirements.txt...{RESET}\n")
+        deps = get_deps_from_requirements()
+
     installed = get_installed_versions()
 
     if not deps:
-        print("No dependencies found in pyproject.toml")
+        print("No dependencies found.")
         return
 
     # fetch latest versions
@@ -261,6 +308,21 @@ def update_pyproject_content(content: str, dep: dict, new_version: str) -> str:
     return content
 
 
+def update_requirements_content(content: str, dep: dict, new_version: str) -> str:
+    """Update a dependency version in requirements.txt content."""
+    old_str = dep["raw"]
+    if dep["operator"] and dep["version"]:
+        new_str = old_str.replace(
+            f"{dep['operator']}{dep['version']}",
+            f"{dep['operator']}{new_version}",
+        )
+    else:
+        new_str = f"{dep['name']}{dep['extras']}>={new_version}"
+
+    content = content.replace(old_str, new_str)
+    return content
+
+
 def generate_requirements(pyproject: dict) -> str:
     """Generate requirements.txt from main dependencies."""
     lines = []
@@ -273,8 +335,18 @@ def cmd_upgrade():
     print(f"\n{BOLD}Python Check Updates{RESET}")
     print(f"{DIM}Upgrading dependencies...{RESET}\n")
 
-    pyproject = load_pyproject()
-    deps = get_all_dependencies(pyproject)
+    has_pyproject, has_requirements = detect_sources()
+
+    if not has_pyproject and not has_requirements:
+        print(f"\n  {RED}No pyproject.toml or requirements.txt found.{RESET}\n")
+        sys.exit(1)
+
+    if has_pyproject:
+        pyproject = load_pyproject()
+        deps = get_all_dependencies(pyproject)
+    else:
+        deps = get_deps_from_requirements()
+
     installed = get_installed_versions()
 
     if not deps:
@@ -292,42 +364,57 @@ def cmd_upgrade():
     if not to_update:
         print(f"  {GREEN}All pinned versions are already up to date!{RESET}\n")
 
-        # still check if requirements.txt needs sync
-        req_path = Path("requirements.txt")
-        expected = generate_requirements(pyproject)
-        if not req_path.exists() or req_path.read_text() != expected:
-            req_path.write_text(expected)
-            print("  Synced requirements.txt\n")
+        # sync requirements.txt from pyproject if both exist
+        if has_pyproject and has_requirements:
+            pyproject = load_pyproject()
+            expected = generate_requirements(pyproject)
+            if REQUIREMENTS_PATH.read_text() != expected:
+                REQUIREMENTS_PATH.write_text(expected)
+                print("  Synced requirements.txt\n")
 
         return
 
-    # update pyproject.toml
-    content = PYPROJECT_PATH.read_text()
-
+    # update files
     print(f"  {BOLD}Updating pinned versions:{RESET}\n")
-
     name_w = max(len(d["name"] + d["extras"]) for d in to_update) + 2
 
-    for dep in to_update:
-        name_display = dep["name"] + dep["extras"]
-        old_v = dep["operator"] + dep["version"] if dep["version"] else "any"
-        new_v = dep["operator"] + dep["latest"] if dep["operator"] else ">=" + dep["latest"]
+    if has_pyproject:
+        content = PYPROJECT_PATH.read_text()
+        for dep in to_update:
+            name_display = dep["name"] + dep["extras"]
+            old_v = dep["operator"] + dep["version"] if dep["version"] else "any"
+            new_v = dep["operator"] + dep["latest"] if dep["operator"] else ">=" + dep["latest"]
+            content = update_pyproject_content(content, dep, dep["latest"])
+            print(f"  {name_display:<{name_w}} {RED}{old_v}{RESET} -> {GREEN}{new_v}{RESET}")
+        PYPROJECT_PATH.write_text(content)
+        print(f"\n  Updated {BOLD}pyproject.toml{RESET}")
 
-        content = update_pyproject_content(content, dep, dep["latest"])
-        print(f"  {name_display:<{name_w}} {RED}{old_v}{RESET} -> {GREEN}{new_v}{RESET}")
+        # regenerate requirements.txt if it exists
+        if has_requirements:
+            updated_pyproject = tomllib.loads(content)
+            req_content = generate_requirements(updated_pyproject)
+            REQUIREMENTS_PATH.write_text(req_content)
+            print(f"  Updated {BOLD}requirements.txt{RESET}")
+    else:
+        # requirements.txt only
+        content = REQUIREMENTS_PATH.read_text()
+        for dep in to_update:
+            name_display = dep["name"] + dep["extras"]
+            old_v = dep["operator"] + dep["version"] if dep["version"] else "any"
+            new_v = dep["operator"] + dep["latest"] if dep["operator"] else ">=" + dep["latest"]
+            content = update_requirements_content(content, dep, dep["latest"])
+            print(f"  {name_display:<{name_w}} {RED}{old_v}{RESET} -> {GREEN}{new_v}{RESET}")
+        REQUIREMENTS_PATH.write_text(content)
+        print(f"\n  Updated {BOLD}requirements.txt{RESET}")
 
-    PYPROJECT_PATH.write_text(content)
-    print(f"\n  Updated {BOLD}pyproject.toml{RESET}")
+    # run sync with appropriate tool
+    if has_pyproject:
+        print(f"\n{DIM}Running uv sync --all-extras...{RESET}\n")
+        code, _, stderr = run_command("uv sync --all-extras", capture=False)
+    else:
+        print(f"\n{DIM}Running pip install -r requirements.txt...{RESET}\n")
+        code, _, stderr = run_command("pip install -r requirements.txt", capture=False)
 
-    # regenerate requirements.txt from the updated pyproject
-    updated_pyproject = tomllib.loads(content)
-    req_content = generate_requirements(updated_pyproject)
-    Path("requirements.txt").write_text(req_content)
-    print(f"  Updated {BOLD}requirements.txt{RESET}")
-
-    # run uv sync
-    print(f"\n{DIM}Running uv sync --all-extras...{RESET}\n")
-    code, _, stderr = run_command("uv sync --all-extras", capture=False)
     if code != 0:
         print(f"\n  {RED}Sync failed: {stderr}{RESET}")
         sys.exit(1)

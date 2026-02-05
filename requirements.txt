@@ -1,5 +1,0 @@
-aiosqlite>=0.22.1
-asyncpg>=0.31.0
-httpx>=0.28.1
-pydantic>=2.12.5
-sqlalchemy>=2.0.46

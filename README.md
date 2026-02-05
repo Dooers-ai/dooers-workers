@@ -1,6 +1,6 @@
 # dooers-workers
 
-Python SDK for dooers.ai chat protocol.
+dooers.ai SDK for creating agent workers
 
 ## Install
 
