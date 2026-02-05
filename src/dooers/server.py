@@ -93,8 +93,9 @@ class WorkerServer:
             batch_size = self._config.analytics_batch_size or ANALYTICS_BATCH_SIZE
             flush_interval = self._config.analytics_flush_interval or ANALYTICS_FLUSH_INTERVAL
 
+            webhook_url = self._config.analytics_webhook_url or ANALYTICS_WEBHOOK_URL
             self._analytics_collector = AnalyticsCollector(
-                webhook_url=ANALYTICS_WEBHOOK_URL,
+                webhook_url=webhook_url,
                 registry=self._registry,
                 subscriptions=self._analytics_subscriptions,
                 batch_size=batch_size,

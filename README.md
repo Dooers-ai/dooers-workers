@@ -1,4 +1,4 @@
-# dooers
+# dooers-workers
 
 Python SDK for dooers.ai chat protocol.
 
@@ -30,7 +30,7 @@ worker_server = WorkerServer(WorkerConfig(
 ))
 
 
-async def agent(request, response, memory, analytics, settings):
+async def agent_handler(request, response, memory, analytics, settings):
     yield response.run_start()
 
     # Track custom event
@@ -48,15 +48,13 @@ async def agent(request, response, memory, analytics, settings):
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
     await websocket.accept()
-    await worker_server.handle(websocket, agent)
+    await worker_server.handle(websocket, agent_handler)
 ```
 
-## API
-
-### Handler Signature
+## agent_handler
 
 ```python
-async def handler(request, response, memory, analytics, settings):
+async def agent_handler(request, response, memory, analytics, settings):
     ...
 ```
 
@@ -115,11 +113,14 @@ all_values = await settings.get_all()
 await settings.set("field_id", new_value)
 ```
 
+## worker_server
+
 ### Persistence
 
 Direct database access for threads, events, and settings.
 
 ```python
+
 persistence = worker_server.persistence
 
 thread = await persistence.get_thread(thread_id)
@@ -139,6 +140,7 @@ await persistence.update_setting(worker_id, field_id, value)
 Pushes events to WebSocket subscribers. `send_event` also persists the event and updates the thread timestamp.
 
 ```python
+
 broadcast = worker_server.broadcast
 
 # Persist + broadcast a message (returns event, connections notified)

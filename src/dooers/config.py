@@ -14,6 +14,7 @@ class WorkerConfig:
 
     # Analytics (optional, defaults from settings.py)
     analytics_enabled: bool = True
+    analytics_webhook_url: str | None = None  # Override default webhook URL
     analytics_batch_size: int | None = None  # Override default
     analytics_flush_interval: float | None = None  # Override default
 
