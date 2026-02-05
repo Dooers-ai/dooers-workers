@@ -1,22 +1,22 @@
 [project]
-name = "dooers"
+name = "dooers-workers"
 version = "0.2.0"
 description = "Python SDK for dooers.ai chat protocol"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "pydantic>=2.0",
-    "sqlalchemy>=2.0",
-    "asyncpg>=0.29",
-    "aiosqlite>=0.19",
-    "httpx>=0.25",
+    "pydantic>=2.12.5",
+    "sqlalchemy>=2.0.46",
+    "asyncpg>=0.31.0",
+    "aiosqlite>=0.22.1",
+    "httpx>=0.28.1",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0",
-    "pytest-asyncio>=0.23",
-    "ruff>=0.1",
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
+    "ruff>=0.15.0",
 ]
 
 [build-system]
@@ -35,3 +35,18 @@ select = ["E", "F", "I", "UP"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+[tool.poe.tasks]
+format = "ruff format ."
+"format:imports" = "ruff check --select I --fix ."
+check = "ruff check ."
+"check:fix" = "ruff check --fix ."
+test = "pytest"
+"test:cov" = "pytest --cov=src --cov-report=term-missing"
+pcu = "python scripts/pcu.py check"
+"pcu:upgrade" = "python scripts/pcu.py upgrade"
+
+[dependency-groups]
+dev = [
+    "poethepoet>=0.40.0",
+]
