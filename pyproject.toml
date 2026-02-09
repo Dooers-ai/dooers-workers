@@ -1,6 +1,6 @@
 [project]
 name = "dooers-workers"
-version = "0.2.1"
+version = "0.2.2"
 description = "dooers.ai SDK for creating agent workers"
 readme = "README.md"
 requires-python = ">=3.11"
