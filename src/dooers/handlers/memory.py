@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from dooers.protocol.models import ThreadEvent
 
 if TYPE_CHECKING:
-    from dooers.persistence.base import Persistence
+    from dooers.persistence.base import EventOrder, Persistence
 
 HistoryFormat = Literal["openai", "anthropic", "google", "cohere", "voyage"]
 
@@ -13,61 +13,46 @@ class WorkerMemory:
         self._thread_id = thread_id
         self._persistence = persistence
 
-    async def get_history_raw(self, limit: int = 50) -> list[ThreadEvent]:
-        """
-        Get raw conversation history as ThreadEvent objects.
-
-        Args:
-            limit: Maximum number of events to return
-
-        Returns:
-            List of ThreadEvent objects
-        """
+    async def get_history_raw(
+        self,
+        limit: int = 50,
+        order: "EventOrder" = "asc",
+        filters: dict[str, str] | None = None,
+    ) -> list[ThreadEvent]:
         return await self._persistence.get_events(
-            thread_id=self._thread_id,
-            after_event_id=None,
+            self._thread_id,
             limit=limit,
+            order=order,
+            filters=filters,
         )
 
     async def get_history(
         self,
         limit: int = 50,
         format: HistoryFormat = "openai",
+        order: "EventOrder" = "desc",
+        filters: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
-        """
-        Get conversation history formatted for LLM APIs.
+        raw_limit = limit * 3
+        events = await self.get_history_raw(raw_limit, order=order, filters=filters)
 
-        Args:
-            limit: Maximum number of events to return
-            format: Output format - 'openai', 'anthropic', 'google', 'cohere', 'voyage'
+        if order == "desc":
+            events.reverse()
 
-        Returns:
-            List of message dicts in the specified format
-
-        Format examples:
-            openai:    {"role": "user/assistant", "content": "..."}
-            anthropic: {"role": "user/assistant", "content": "..."}
-            google:    {"role": "user/model", "parts": [{"text": "..."}]}
-            cohere:    {"role": "USER/CHATBOT", "message": "..."}
-            voyage:    {"role": "user/assistant", "content": "..."}
-        """
-        events = await self.get_history_raw(limit)
         messages: list[dict[str, Any]] = []
-
         for event in events:
             if event.type != "message" or not event.content:
                 continue
 
-            # Extract text from content parts
             text = " ".join(part.text for part in event.content if hasattr(part, "text"))
             if not text:
                 continue
 
-            is_user = event.actor == "user"
-            message = self._format_message(text, is_user, format)
-            messages.append(message)
+            messages.append(self._format_message(text, event.actor == "user", format))
 
-        return messages
+        if order == "desc":
+            return messages[-limit:]
+        return messages[:limit]
 
     def _format_message(
         self,
@@ -75,7 +60,6 @@ class WorkerMemory:
         is_user: bool,
         format: HistoryFormat,
     ) -> dict[str, Any]:
-        """Format a single message for the specified provider."""
         match format:
             case "openai" | "voyage":
                 return {
@@ -98,7 +82,6 @@ class WorkerMemory:
                     "message": text,
                 }
             case _:
-                # Default to OpenAI format
                 return {
                     "role": "user" if is_user else "assistant",
                     "content": text,

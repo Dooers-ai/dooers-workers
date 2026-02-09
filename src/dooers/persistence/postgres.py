@@ -69,6 +69,17 @@ class PostgresPersistence:
                 )
             """)
 
+            # Incremental migrations for columns added after initial release
+            await conn.execute(f"""
+                ALTER TABLE {events_table} ADD COLUMN IF NOT EXISTS run_id TEXT
+            """)
+            await conn.execute(f"""
+                ALTER TABLE {events_table} ADD COLUMN IF NOT EXISTS user_name TEXT
+            """)
+            await conn.execute(f"""
+                ALTER TABLE {events_table} ADD COLUMN IF NOT EXISTS user_email TEXT
+            """)
+
             await conn.execute(f"""
                 CREATE INDEX IF NOT EXISTS idx_{self._prefix}threads_worker_id
                     ON {threads_table}(worker_id)
@@ -172,6 +183,19 @@ class PostgresPersistence:
                 thread.id,
             )
 
+    async def delete_thread(self, thread_id: str) -> None:
+        if not self._pool:
+            raise RuntimeError("Not connected")
+
+        events_table = f"{self._prefix}events"
+        runs_table = f"{self._prefix}runs"
+        threads_table = f"{self._prefix}threads"
+
+        async with self._pool.acquire() as conn:
+            await conn.execute(f"DELETE FROM {events_table} WHERE thread_id = $1", thread_id)
+            await conn.execute(f"DELETE FROM {runs_table} WHERE thread_id = $1", thread_id)
+            await conn.execute(f"DELETE FROM {threads_table} WHERE id = $1", thread_id)
+
     async def list_threads(
         self,
         worker_id: str,
@@ -254,80 +278,70 @@ class PostgresPersistence:
     async def get_events(
         self,
         thread_id: str,
-        after_event_id: str | None,
-        limit: int,
+        *,
+        after_event_id: str | None = None,
+        limit: int = 50,
+        order: str = "asc",
+        filters: dict[str, str] | None = None,
     ) -> list[ThreadEvent]:
         if not self._pool:
             raise RuntimeError("Not connected")
 
+        from dooers.persistence.base import FILTERABLE_FIELDS
+
         table = f"{self._prefix}events"
+        conditions = ["thread_id = $1"]
+        params: list[Any] = [thread_id]
+        idx = 2
+
+        if after_event_id:
+            async with self._pool.acquire() as conn:
+                ref_row = await conn.fetchrow(f"SELECT created_at FROM {table} WHERE id = $1", after_event_id)
+            if ref_row:
+                op = "<" if order == "desc" else ">"
+                conditions.append(f"created_at {op} ${idx}")
+                params.append(ref_row["created_at"])
+                idx += 1
+
+        if filters:
+            for key, value in filters.items():
+                if key in FILTERABLE_FIELDS:
+                    conditions.append(f"{key} = ${idx}")
+                    params.append(value)
+                    idx += 1
+
+        direction = "DESC" if order == "desc" else "ASC"
+        where = " AND ".join(conditions)
+        params.append(limit)
+
+        query = f"SELECT * FROM {table} WHERE {where} ORDER BY created_at {direction} LIMIT ${idx}"
+
         async with self._pool.acquire() as conn:
-            if after_event_id:
-                ref_row = await conn.fetchrow(
-                    f"SELECT created_at FROM {table} WHERE id = $1",
-                    after_event_id,
-                )
-                if ref_row:
-                    rows = await conn.fetch(
-                        f"""
-                        SELECT * FROM {table}
-                        WHERE thread_id = $1 AND created_at > $2
-                        ORDER BY created_at ASC
-                        LIMIT $3
-                        """,
-                        thread_id,
-                        ref_row["created_at"],
-                        limit,
-                    )
-                else:
-                    rows = await conn.fetch(
-                        f"""
-                        SELECT * FROM {table}
-                        WHERE thread_id = $1
-                        ORDER BY created_at ASC
-                        LIMIT $2
-                        """,
-                        thread_id,
-                        limit,
-                    )
-            else:
-                rows = await conn.fetch(
-                    f"""
-                    SELECT * FROM {table}
-                    WHERE thread_id = $1
-                    ORDER BY created_at ASC
-                    LIMIT $2
-                    """,
-                    thread_id,
-                    limit,
-                )
+            rows = await conn.fetch(query, *params)
 
-        events = []
-        for row in rows:
-            content = None
-            if row["content"]:
-                content_data = json.loads(row["content"])
-                content = [self._deserialize_content_part(p) for p in content_data]
+        return [self._row_to_event(row) for row in rows]
 
-            data = json.loads(row["data"]) if row["data"] else None
+    def _row_to_event(self, row: asyncpg.Record) -> ThreadEvent:
+        content = None
+        if row["content"]:
+            content_data = json.loads(row["content"])
+            content = [self._deserialize_content_part(p) for p in content_data]
 
-            events.append(
-                ThreadEvent(
-                    id=row["id"],
-                    thread_id=row["thread_id"],
-                    run_id=row["run_id"],
-                    type=row["type"],
-                    actor=row["actor"],
-                    user_id=row["user_id"],
-                    user_name=row["user_name"],
-                    user_email=row["user_email"],
-                    content=content,
-                    data=data,
-                    created_at=row["created_at"],
-                )
-            )
+        data = json.loads(row["data"]) if row["data"] else None
 
-        return events
+        return ThreadEvent(
+            id=row["id"],
+            thread_id=row["thread_id"],
+            run_id=row["run_id"],
+            type=row["type"],
+            actor=row["actor"],
+            user_id=row["user_id"],
+            user_name=row["user_name"],
+            user_email=row["user_email"],
+            content=content,
+            data=data,
+            created_at=row["created_at"],
+        )
 
     async def create_run(self, run: Run) -> None:
         if not self._pool:

@@ -11,7 +11,7 @@ import httpx
 from .models import AnalyticsBatch, AnalyticsEvent, AnalyticsEventPayload
 
 if TYPE_CHECKING:
-    from ..registry import ConnectionRegistry
+    from dooers.registry import ConnectionRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -134,10 +134,15 @@ class AnalyticsCollector:
 
     async def _broadcast(self, worker_id: str, payload: AnalyticsEventPayload) -> None:
         """Broadcast an analytics event to all subscribers for a worker."""
-        from ..protocol.frames import S2C_AnalyticsEvent
+        from dooers.protocol.frames import S2C_AnalyticsEvent
 
         subscriber_ws_ids = self._subscriptions.get(worker_id, set())
         if not subscriber_ws_ids:
+            logger.debug(
+                "Analytics broadcast skipped — no subscribers for worker %s (subscriptions: %s)",
+                worker_id,
+                list(self._subscriptions.keys()),
+            )
             return
 
         message = S2C_AnalyticsEvent(
@@ -146,17 +151,22 @@ class AnalyticsCollector:
         )
         message_json = message.model_dump_json()
 
-        # Send to all subscribed connections
-        # subscriber_ws_ids contains the ws_id from Router, which we use to track subscriptions
-        # We need to send to all connections since we can't map ws_id back to ws objects
-        # The subscription dict tracks which ws_ids are subscribed, but we broadcast to all
-        # connections for the worker - this is acceptable for real-time analytics
         connections = self._registry.get_connections(worker_id)
+        logger.debug(
+            "Analytics broadcast: event=%s, worker=%s, subscribers=%d, connections=%d",
+            payload.event,
+            worker_id,
+            len(subscriber_ws_ids),
+            len(connections),
+        )
+        sent = 0
         for ws in connections:
             try:
                 await ws.send_text(message_json)
-            except Exception:
-                logger.warning("Failed to send analytics event to subscriber")
+                sent += 1
+            except Exception as e:
+                logger.warning("Failed to send analytics event to subscriber: %s", e)
+        logger.debug("Analytics broadcast sent to %d/%d connections", sent, len(connections))
 
     async def _flush(self) -> None:
         """Flush the buffer, acquiring lock first."""

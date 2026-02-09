@@ -1,7 +1,11 @@
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from dooers.protocol.models import Run, Thread, ThreadEvent
+
+EventOrder = Literal["asc", "desc"]
+
+FILTERABLE_FIELDS = {"type", "actor", "user_id", "user_name", "user_email", "run_id"}
 
 
 class Persistence(Protocol):
@@ -18,25 +22,20 @@ class Persistence(Protocol):
         cursor: str | None,
         limit: int,
     ) -> list[Thread]: ...
+    async def delete_thread(self, thread_id: str) -> None: ...
     async def create_event(self, event: ThreadEvent) -> None: ...
     async def get_events(
         self,
         thread_id: str,
-        after_event_id: str | None,
-        limit: int,
+        *,
+        after_event_id: str | None = None,
+        limit: int = 50,
+        order: EventOrder = "asc",
+        filters: dict[str, str] | None = None,
     ) -> list[ThreadEvent]: ...
     async def create_run(self, run: Run) -> None: ...
     async def update_run(self, run: Run) -> None: ...
 
-    # Settings methods
-    async def get_settings(self, worker_id: str) -> dict[str, Any]:
-        """Get all stored values for a worker. Returns empty dict if none."""
-        ...
-
-    async def update_setting(self, worker_id: str, field_id: str, value: Any) -> datetime:
-        """Update a single field value. Returns updated_at timestamp."""
-        ...
-
-    async def set_settings(self, worker_id: str, values: dict[str, Any]) -> datetime:
-        """Replace all settings values. Returns updated_at timestamp."""
-        ...
+    async def get_settings(self, worker_id: str) -> dict[str, Any]: ...
+    async def update_setting(self, worker_id: str, field_id: str, value: Any) -> datetime: ...
+    async def set_settings(self, worker_id: str, values: dict[str, Any]) -> datetime: ...

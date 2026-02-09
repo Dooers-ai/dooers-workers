@@ -76,6 +76,16 @@ class C2S_ThreadUnsubscribe(BaseModel):
     payload: ThreadUnsubscribePayload
 
 
+class ThreadDeletePayload(BaseModel):
+    thread_id: str
+
+
+class C2S_ThreadDelete(BaseModel):
+    id: str
+    type: Literal["thread.delete"]
+    payload: ThreadDeletePayload
+
+
 class C2S_EventCreate(BaseModel):
     id: str
     type: Literal["event.create"]
@@ -157,6 +167,7 @@ ClientToServer = Annotated[
     | C2S_ThreadList
     | C2S_ThreadSubscribe
     | C2S_ThreadUnsubscribe
+    | C2S_ThreadDelete
     | C2S_EventCreate
     | C2S_AnalyticsSubscribe
     | C2S_AnalyticsUnsubscribe
@@ -228,6 +239,16 @@ class S2C_ThreadUpsert(BaseModel):
     payload: ThreadUpsertPayload
 
 
+class ThreadDeletedPayload(BaseModel):
+    thread_id: str
+
+
+class S2C_ThreadDeleted(BaseModel):
+    id: str
+    type: Literal["thread.deleted"] = "thread.deleted"
+    payload: ThreadDeletedPayload
+
+
 class S2C_RunUpsert(BaseModel):
     id: str
     type: Literal["run.upsert"] = "run.upsert"
@@ -290,6 +311,7 @@ ServerToClient = (
     | S2C_ThreadSnapshot
     | S2C_EventAppend
     | S2C_ThreadUpsert
+    | S2C_ThreadDeleted
     | S2C_RunUpsert
     | S2C_AnalyticsEvent
     | S2C_FeedbackAck

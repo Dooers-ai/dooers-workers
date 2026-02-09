@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import AsyncGenerator, Callable
 from datetime import UTC, datetime
@@ -22,6 +23,7 @@ from dooers.protocol.frames import (
     C2S_SettingsPatch,
     C2S_SettingsSubscribe,
     C2S_SettingsUnsubscribe,
+    C2S_ThreadDelete,
     C2S_ThreadList,
     C2S_ThreadSubscribe,
     C2S_ThreadUnsubscribe,
@@ -33,10 +35,12 @@ from dooers.protocol.frames import (
     S2C_EventAppend,
     S2C_FeedbackAck,
     S2C_RunUpsert,
+    S2C_ThreadDeleted,
     S2C_ThreadListResult,
     S2C_ThreadSnapshot,
     S2C_ThreadUpsert,
     ServerToClient,
+    ThreadDeletedPayload,
     ThreadListResultPayload,
     ThreadSnapshotPayload,
     ThreadUpsertPayload,
@@ -49,6 +53,8 @@ if TYPE_CHECKING:
     from dooers.features.analytics.collector import AnalyticsCollector
     from dooers.features.settings.broadcaster import SettingsBroadcaster
     from dooers.features.settings.models import SettingsSchema
+
+logger = logging.getLogger(__name__)
 
 
 class WebSocketProtocol(Protocol):
@@ -93,8 +99,8 @@ class Router:
         self._analytics_collector = analytics_collector
         self._settings_broadcaster = settings_broadcaster
         self._settings_schema = settings_schema
-        self._analytics_subscriptions = analytics_subscriptions or {}
-        self._settings_subscriptions = settings_subscriptions or {}
+        self._analytics_subscriptions = analytics_subscriptions if analytics_subscriptions is not None else {}
+        self._settings_subscriptions = settings_subscriptions if settings_subscriptions is not None else {}
 
         # Connection state
         self._ws: WebSocketProtocol | None = None
@@ -146,6 +152,8 @@ class Router:
                 await self._handle_thread_subscribe(ws, frame)
             case C2S_ThreadUnsubscribe():
                 await self._handle_thread_unsubscribe(ws, frame)
+            case C2S_ThreadDelete():
+                await self._handle_thread_delete(ws, frame)
             case C2S_EventCreate():
                 await self._handle_event_create(ws, frame)
             # Analytics frames
@@ -165,6 +173,12 @@ class Router:
 
     async def cleanup(self) -> None:
         """Clean up connection resources. Call this when the connection closes."""
+        logger.info(
+            "Router cleanup: ws=%s, worker=%s, had_analytics_sub=%s",
+            self._ws_id,
+            self._worker_id,
+            self._ws_id in self._analytics_subscriptions.get(self._worker_id or "", set()),
+        )
         if self._worker_id:
             await self._registry.unregister(self._worker_id, self._ws)
 
@@ -172,6 +186,7 @@ class Router:
             if self._worker_id in self._analytics_subscriptions:
                 self._analytics_subscriptions[self._worker_id].discard(self._ws_id)
                 if not self._analytics_subscriptions[self._worker_id]:
+                    logger.info("Analytics subscriptions emptied for worker %s — deleting key", self._worker_id)
                     del self._analytics_subscriptions[self._worker_id]
 
             # Clean up settings subscriptions
@@ -260,7 +275,7 @@ class Router:
             return
 
         events = await self._persistence.get_events(
-            thread_id=thread_id,
+            thread_id,
             after_event_id=frame.payload.after_event_id,
             limit=100,
         )
@@ -283,6 +298,53 @@ class Router:
         self._subscribed_threads.discard(thread_id)
         if self._ws_id in self._subscriptions:
             self._subscriptions[self._ws_id].discard(thread_id)
+        await self._send_ack(ws, frame.id)
+
+    async def _handle_thread_delete(self, ws: WebSocketProtocol, frame: C2S_ThreadDelete) -> None:
+        if not self._worker_id:
+            await self._send_ack(
+                ws,
+                frame.id,
+                ok=False,
+                error={"code": "NOT_CONNECTED", "message": "Must connect first"},
+            )
+            return
+
+        thread_id = frame.payload.thread_id
+        thread = await self._persistence.get_thread(thread_id)
+
+        if not thread:
+            await self._send_ack(
+                ws,
+                frame.id,
+                ok=False,
+                error={"code": "NOT_FOUND", "message": "Thread not found"},
+            )
+            return
+
+        if thread.worker_id != self._worker_id:
+            await self._send_ack(
+                ws,
+                frame.id,
+                ok=False,
+                error={"code": "FORBIDDEN", "message": "Thread belongs to different worker"},
+            )
+            return
+
+        await self._persistence.delete_thread(thread_id)
+
+        # Remove from subscriptions
+        self._subscribed_threads.discard(thread_id)
+        if self._ws_id in self._subscriptions:
+            self._subscriptions[self._ws_id].discard(thread_id)
+
+        # Broadcast deletion to all worker connections
+        deleted_frame = S2C_ThreadDeleted(
+            id=_generate_id(),
+            payload=ThreadDeletedPayload(thread_id=thread_id),
+        )
+        await self._broadcast_to_worker(deleted_frame)
+
         await self._send_ack(ws, frame.id)
 
     async def _handle_event_create(self, ws: WebSocketProtocol, frame: C2S_EventCreate) -> None:
@@ -388,6 +450,8 @@ class Router:
             thread_id=thread_id,
             event_id=user_event_id,
             user_id=self._user_id,
+            user_name=self._user_name,
+            user_email=self._user_email,
         )
         response = WorkerResponse()
         memory = WorkerMemory(thread_id=thread_id, persistence=self._persistence)
@@ -711,6 +775,13 @@ class Router:
             self._analytics_subscriptions[worker_id] = set()
         self._analytics_subscriptions[worker_id].add(self._ws_id)
 
+        logger.info(
+            "Analytics subscribed: ws=%s, worker=%s, total_subscribers=%d",
+            self._ws_id,
+            worker_id,
+            len(self._analytics_subscriptions[worker_id]),
+        )
+
         await self._send_ack(ws, frame.id)
 
     async def _handle_analytics_unsubscribe(
@@ -719,6 +790,11 @@ class Router:
         frame: C2S_AnalyticsUnsubscribe,
     ) -> None:
         worker_id = frame.payload.worker_id
+        logger.info(
+            "Analytics unsubscribed: ws=%s, worker=%s",
+            self._ws_id,
+            worker_id,
+        )
         if worker_id in self._analytics_subscriptions:
             self._analytics_subscriptions[worker_id].discard(self._ws_id)
             if not self._analytics_subscriptions[worker_id]:

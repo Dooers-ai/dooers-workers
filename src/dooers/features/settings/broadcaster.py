@@ -6,7 +6,8 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 if TYPE_CHECKING:
-    from ..registry import ConnectionRegistry, WebSocketProtocol
+    from dooers.registry import ConnectionRegistry, WebSocketProtocol
+
     from .models import SettingsSchema
 
 logger = logging.getLogger(__name__)
@@ -37,7 +38,8 @@ class SettingsBroadcaster:
         values: dict[str, Any],
     ) -> None:
         """Send a settings snapshot directly to a specific WebSocket connection."""
-        from ..protocol.frames import S2C_SettingsSnapshot, SettingsSnapshotPayload
+        from dooers.protocol.frames import S2C_SettingsSnapshot, SettingsSnapshotPayload
+
         from .models import SettingsField
 
         # Merge defaults with stored values
@@ -70,7 +72,7 @@ class SettingsBroadcaster:
         exclude_ws: WebSocketProtocol | None = None,
     ) -> None:
         """Broadcast a settings patch to all subscribers for a worker."""
-        from ..protocol.frames import S2C_SettingsPatch, SettingsPatchBroadcastPayload
+        from dooers.protocol.frames import S2C_SettingsPatch, SettingsPatchBroadcastPayload
 
         subscriber_ws_ids = self._subscriptions.get(worker_id, set())
         if not subscriber_ws_ids:

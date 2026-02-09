@@ -13,6 +13,7 @@ from dooers.protocol.frames import (
     C2S_SettingsPatch,
     C2S_SettingsSubscribe,
     C2S_SettingsUnsubscribe,
+    C2S_ThreadDelete,
     C2S_ThreadList,
     C2S_ThreadSubscribe,
     C2S_ThreadUnsubscribe,
@@ -28,6 +29,7 @@ from dooers.protocol.frames import (
     # Settings S2C frames
     S2C_SettingsPatch,
     S2C_SettingsSnapshot,
+    S2C_ThreadDeleted,
     S2C_ThreadListResult,
     S2C_ThreadSnapshot,
     S2C_ThreadUpsert,
@@ -36,6 +38,8 @@ from dooers.protocol.frames import (
     SettingsSnapshotPayload,
     SettingsSubscribePayload,
     SettingsUnsubscribePayload,
+    ThreadDeletedPayload,
+    ThreadDeletePayload,
     WSFrame,
 )
 from dooers.protocol.models import (
@@ -68,6 +72,7 @@ __all__ = [
     # Existing C2S frames
     "C2S_Connect",
     "C2S_ThreadList",
+    "C2S_ThreadDelete",
     "C2S_ThreadSubscribe",
     "C2S_ThreadUnsubscribe",
     "C2S_EventCreate",
@@ -86,6 +91,9 @@ __all__ = [
     "S2C_EventAppend",
     "S2C_ThreadUpsert",
     "S2C_RunUpsert",
+    "S2C_ThreadDeleted",
+    "ThreadDeletePayload",
+    "ThreadDeletedPayload",
     # Analytics S2C frames
     "S2C_AnalyticsEvent",
     "S2C_FeedbackAck",

@@ -33,12 +33,14 @@ worker_server = WorkerServer(WorkerConfig(
 async def agent_handler(request, response, memory, analytics, settings):
     yield response.run_start()
 
-    # Track custom event
-    await analytics.track("llm.called", data={"model": "gpt-4o-mini"})
+    history = await memory.get_history(limit=20, format="openai")
 
     completion = await openai.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[{"role": "user", "content": request.message}],
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant."},
+            *history,
+        ],
     )
 
     yield response.text(completion.choices[0].message.content)
@@ -66,23 +68,33 @@ request.content      # list[ContentPart]
 request.thread_id    # str
 request.event_id     # str
 request.user_id      # str | None
+request.user_name    # str | None
+request.user_email   # str | None
 ```
 
 ### Memory
 
 ```python
-# Get formatted history (defaults to OpenAI format)
+# Latest 50 messages in chronological order (default)
 messages = await memory.get_history(limit=50)
 
-# Specify format for different providers
+# Oldest 50 messages in chronological order
+messages = await memory.get_history(limit=50, order="asc")
+
+# Format for different LLM providers
 messages = await memory.get_history(format="openai")
 messages = await memory.get_history(format="anthropic")
 messages = await memory.get_history(format="google")
 messages = await memory.get_history(format="cohere")
 messages = await memory.get_history(format="voyage")
 
-# Get raw ThreadEvent objects
+# Filter by event fields
+messages = await memory.get_history(filters={"user_email": "alice@example.com"})
+messages = await memory.get_history(filters={"actor": "user"})
+
+# Raw ThreadEvent objects
 events = await memory.get_history_raw(limit=50)
+events = await memory.get_history_raw(limit=50, order="desc", filters={"type": "message"})
 ```
 
 ### Response
@@ -129,7 +141,8 @@ await persistence.update_thread(thread)
 threads = await persistence.list_threads(worker_id, user_id, cursor, limit)
 
 await persistence.create_event(event)
-events = await persistence.get_events(thread_id, after_event_id, limit)
+events = await persistence.get_events(thread_id, limit=50, order="asc")
+events = await persistence.get_events(thread_id, order="desc", filters={"actor": "user"})
 
 settings = await persistence.get_settings(worker_id)
 await persistence.update_setting(worker_id, field_id, value)
@@ -208,5 +221,3 @@ worker_server = WorkerServer(WorkerConfig(
 - `EMAIL` - Email input
 - `DATE` - Date picker
 - `IMAGE` - Display-only image (e.g., QR codes)
-
-
