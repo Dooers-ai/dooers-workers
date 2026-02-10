@@ -44,19 +44,16 @@ class WorkerServer:
 
     @property
     def registry(self) -> ConnectionRegistry:
-        """Access the connection registry for broadcasting."""
         return self._registry
 
     @property
     def persistence(self) -> Persistence:
-        """Access the persistence layer for external thread/event management."""
         if not self._persistence:
             raise RuntimeError("Server not initialized. Call handle() first or ensure_initialized().")
         return self._persistence
 
     @property
     def broadcast(self) -> BroadcastManager:
-        """Access the broadcast manager for sending events from backend."""
         if not self._broadcast:
             raise RuntimeError("Server not initialized. Call handle() first or ensure_initialized().")
         return self._broadcast
@@ -118,7 +115,6 @@ class WorkerServer:
         return self._persistence
 
     async def ensure_initialized(self) -> None:
-        """Explicitly initialize the server (useful for accessing broadcast before handling connections)."""
         await self._ensure_initialized()
 
     async def migrate(self) -> None:
@@ -148,7 +144,7 @@ class WorkerServer:
             # Log unexpected errors (connection closed errors are expected)
             error_name = type(e).__name__
             if error_name not in ("WebSocketDisconnect", "ConnectionClosedOK", "ConnectionClosedError"):
-                logger.debug("WebSocket connection error: %s: %s", error_name, e)
+                logger.debug("[dooers-workers] websocket connection error: %s: %s", error_name, e)
         finally:
             # Clean up connection resources
             await router.cleanup()

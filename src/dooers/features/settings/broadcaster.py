@@ -62,7 +62,7 @@ class SettingsBroadcaster:
         try:
             await ws.send_text(message.model_dump_json())
         except Exception:
-            logger.warning("Failed to send settings snapshot")
+            logger.warning("[dooers-workers] failed to send settings snapshot")
 
     async def broadcast_patch(
         self,
@@ -71,7 +71,6 @@ class SettingsBroadcaster:
         value: Any,
         exclude_ws: WebSocketProtocol | None = None,
     ) -> None:
-        """Broadcast a settings patch to all subscribers for a worker."""
         from dooers.protocol.frames import S2C_SettingsPatch, SettingsPatchBroadcastPayload
 
         subscriber_ws_ids = self._subscriptions.get(worker_id, set())

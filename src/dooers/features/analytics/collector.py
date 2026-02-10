@@ -17,15 +17,6 @@ logger = logging.getLogger(__name__)
 
 
 class AnalyticsCollector:
-    """
-    Collects analytics events, broadcasts to subscribers, and batches for webhook delivery.
-
-    Features:
-    - Real-time broadcast to analytics subscribers
-    - Batched webhook delivery (configurable size and interval)
-    - Background flush task for time-based batching
-    """
-
     def __init__(
         self,
         webhook_url: str,
@@ -46,7 +37,6 @@ class AnalyticsCollector:
         self._running = False
 
     async def start(self) -> None:
-        """Start the background flush task and HTTP client."""
         if self._running:
             return
         self._running = True
@@ -54,7 +44,6 @@ class AnalyticsCollector:
         self._flush_task = asyncio.create_task(self._flush_loop())
 
     async def stop(self) -> None:
-        """Stop the background task and flush remaining events."""
         self._running = False
         if self._flush_task:
             self._flush_task.cancel()
@@ -83,11 +72,6 @@ class AnalyticsCollector:
         event_id: str | None = None,
         data: dict[str, Any] | None = None,
     ) -> None:
-        """
-        Track an analytics event.
-
-        Immediately broadcasts to analytics subscribers and adds to batch buffer.
-        """
         payload = AnalyticsEventPayload(
             event=event,
             timestamp=datetime.now(UTC),
@@ -118,7 +102,6 @@ class AnalyticsCollector:
         user_id: str | None = None,
         reason: str | None = None,
     ) -> None:
-        """Record a feedback event (like or dislike)."""
         event = AnalyticsEvent.FEEDBACK_LIKE if feedback_type == "like" else AnalyticsEvent.FEEDBACK_DISLIKE
         await self.track(
             event=event.value,
@@ -139,7 +122,7 @@ class AnalyticsCollector:
         subscriber_ws_ids = self._subscriptions.get(worker_id, set())
         if not subscriber_ws_ids:
             logger.debug(
-                "Analytics broadcast skipped — no subscribers for worker %s (subscriptions: %s)",
+                "[dooers-workers] analytics broadcast skipped — no subscribers for worker %s (subscriptions: %s)",
                 worker_id,
                 list(self._subscriptions.keys()),
             )
@@ -153,7 +136,7 @@ class AnalyticsCollector:
 
         connections = self._registry.get_connections(worker_id)
         logger.debug(
-            "Analytics broadcast: event=%s, worker=%s, subscribers=%d, connections=%d",
+            "[dooers-workers] analytics broadcast: event=%s, worker=%s, subscribers=%d, connections=%d",
             payload.event,
             worker_id,
             len(subscriber_ws_ids),
@@ -165,16 +148,14 @@ class AnalyticsCollector:
                 await ws.send_text(message_json)
                 sent += 1
             except Exception as e:
-                logger.warning("Failed to send analytics event to subscriber: %s", e)
-        logger.debug("Analytics broadcast sent to %d/%d connections", sent, len(connections))
+                logger.warning("[dooers-workers] failed to send analytics event to subscriber: %s", e)
+        logger.debug("[dooers-workers] analytics broadcast sent to %d/%d connections", sent, len(connections))
 
     async def _flush(self) -> None:
-        """Flush the buffer, acquiring lock first."""
         async with self._lock:
             await self._flush_locked()
 
     async def _flush_locked(self) -> None:
-        """Flush the buffer (must be called with lock held)."""
         if not self._buffer:
             return
 
@@ -198,7 +179,6 @@ class AnalyticsCollector:
             await self._send_to_webhook(batch)
 
     async def _send_to_webhook(self, batch: AnalyticsBatch) -> None:
-        """Send a batch to the webhook endpoint (fire and forget with retry)."""
         if not self._http_client:
             return
 
@@ -210,15 +190,14 @@ class AnalyticsCollector:
             )
             if response.status_code >= 400:
                 logger.warning(
-                    "Analytics webhook returned %d: %s",
+                    "[dooers-workers] analytics webhook returned %d: %s",
                     response.status_code,
                     response.text[:200],
                 )
         except httpx.RequestError as e:
-            logger.warning("Failed to send analytics batch: %s", e)
+            logger.warning("[dooers-workers] failed to send analytics batch: %s", e)
 
     async def _flush_loop(self) -> None:
-        """Background task that flushes every flush_interval seconds."""
         while self._running:
             try:
                 await asyncio.sleep(self._flush_interval)
@@ -226,4 +205,4 @@ class AnalyticsCollector:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.exception("Error in analytics flush loop: %s", e)
+                logger.exception("[dooers-workers] error in analytics flush loop: %s", e)

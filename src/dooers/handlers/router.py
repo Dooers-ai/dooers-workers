@@ -172,9 +172,8 @@ class Router:
                 await self._handle_settings_patch(ws, frame)
 
     async def cleanup(self) -> None:
-        """Clean up connection resources. Call this when the connection closes."""
         logger.info(
-            "Router cleanup: ws=%s, worker=%s, had_analytics_sub=%s",
+            "[dooers-workers] router cleanup: ws=%s, worker=%s, had_analytics_sub=%s",
             self._ws_id,
             self._worker_id,
             self._ws_id in self._analytics_subscriptions.get(self._worker_id or "", set()),
@@ -186,7 +185,7 @@ class Router:
             if self._worker_id in self._analytics_subscriptions:
                 self._analytics_subscriptions[self._worker_id].discard(self._ws_id)
                 if not self._analytics_subscriptions[self._worker_id]:
-                    logger.info("Analytics subscriptions emptied for worker %s — deleting key", self._worker_id)
+                    logger.info("[dooers-workers] analytics subscriptions emptied for worker %s — deleting key", self._worker_id)
                     del self._analytics_subscriptions[self._worker_id]
 
             # Clean up settings subscriptions
@@ -776,7 +775,7 @@ class Router:
         self._analytics_subscriptions[worker_id].add(self._ws_id)
 
         logger.info(
-            "Analytics subscribed: ws=%s, worker=%s, total_subscribers=%d",
+            "[dooers-workers] analytics subscribed: ws=%s, worker=%s, total_subscribers=%d",
             self._ws_id,
             worker_id,
             len(self._analytics_subscriptions[worker_id]),
@@ -791,7 +790,7 @@ class Router:
     ) -> None:
         worker_id = frame.payload.worker_id
         logger.info(
-            "Analytics unsubscribed: ws=%s, worker=%s",
+            "[dooers-workers] analytics unsubscribed: ws=%s, worker=%s",
             self._ws_id,
             worker_id,
         )

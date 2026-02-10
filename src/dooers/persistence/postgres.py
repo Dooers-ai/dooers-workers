@@ -1,10 +1,13 @@
 import json
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
 import asyncpg
 
 from dooers.protocol.models import DocumentPart, ImagePart, Run, TextPart, Thread, ThreadEvent
+
+logger = logging.getLogger(__name__)
 
 
 class PostgresPersistence:
@@ -29,14 +32,63 @@ class PostgresPersistence:
         self._pool: asyncpg.Pool | None = None
 
     async def connect(self) -> None:
-        self._pool = await asyncpg.create_pool(
-            host=self._host,
-            port=self._port,
-            user=self._user,
-            database=self._database,
-            password=self._password,
-            ssl="require" if self._ssl else None,
+        ssl_mode = "require" if self._ssl else None
+        logger.info(
+            "[dooers-workers] connecting to postgresql at %s:%s/%s (user=%s, ssl=%s)",
+            self._host,
+            self._port,
+            self._database,
+            self._user,
+            ssl_mode,
         )
+        try:
+            self._pool = await asyncpg.create_pool(
+                host=self._host,
+                port=self._port,
+                user=self._user,
+                database=self._database,
+                password=self._password,
+                ssl=ssl_mode,
+                min_size=1,
+                max_size=10,
+                timeout=30,
+                command_timeout=30,
+            )
+            logger.info("[dooers-workers] successfully connected to postgresql")
+        except TimeoutError:
+            logger.error(
+                "[dooers-workers] connection to postgresql timed out. host=%s, port=%s, db=%s, ssl=%s. ",
+                self._host,
+                self._port,
+                self._database,
+                ssl_mode,
+            )
+            raise
+        except OSError as e:
+            logger.error(
+                "[dooers-workers] cannot reach postgreSQL at %s:%s - %s. ",
+                self._host,
+                self._port,
+                e,
+            )
+            raise
+        except asyncpg.InvalidPasswordError:
+            logger.error(
+                "[dooers-workers] authentication failed for user '%s' on database '%s'. ",
+                self._user,
+                self._database,
+            )
+            raise
+        except Exception as e:
+            logger.error(
+                "[dooers-workers] failed to connect to postgresql at %s:%s/%s - %s: %s",
+                self._host,
+                self._port,
+                self._database,
+                type(e).__name__,
+                e,
+            )
+            raise
 
     async def disconnect(self) -> None:
         if self._pool:
