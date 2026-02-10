@@ -6,6 +6,19 @@ if TYPE_CHECKING:
     from dooers.features.settings.models import SettingsSchema
 
 
+def _parse_ssl(value: str) -> bool | str:
+    """Parse SSL config: accepts bool strings ('true'/'false') or PostgreSQL SSL modes."""
+    lower = value.lower().strip()
+    if lower in ("false", "0", "no", "off", ""):
+        return False
+    if lower in ("true", "1", "yes", "on"):
+        return True
+    # PostgreSQL SSL modes: disable, allow, prefer, require, verify-ca, verify-full
+    if lower in ("disable", "allow", "prefer", "require", "verify-ca", "verify-full"):
+        return lower
+    return False
+
+
 @dataclass
 class WorkerConfig:
     database_type: Literal["postgres", "sqlite"]
@@ -16,7 +29,7 @@ class WorkerConfig:
     database_user: str = field(default_factory=lambda: os.environ.get("WORKER_DATABASE_USER", "postgres"))
     database_name: str = field(default_factory=lambda: os.environ.get("WORKER_DATABASE_NAME", ""))
     database_password: str = field(default_factory=lambda: os.environ.get("WORKER_DATABASE_PASSWORD", ""))
-    database_ssl: bool = field(default_factory=lambda: os.environ.get("WORKER_DATABASE_SSL", "false").lower() == "true")
+    database_ssl: bool | str = field(default_factory=lambda: _parse_ssl(os.environ.get("WORKER_DATABASE_SSL", "false")))
 
     table_prefix: str = "worker_"
     auto_migrate: bool = True

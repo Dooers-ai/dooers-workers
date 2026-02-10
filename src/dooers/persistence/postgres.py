@@ -1,5 +1,6 @@
 import json
 import logging
+import ssl as ssl_module
 from datetime import UTC, datetime
 from typing import Any
 
@@ -8,6 +9,38 @@ import asyncpg
 from dooers.protocol.models import DocumentPart, ImagePart, Run, TextPart, Thread, ThreadEvent
 
 logger = logging.getLogger(__name__)
+
+
+def _build_ssl_context(ssl_config: bool | str) -> ssl_module.SSLContext | str | None:
+    """Build SSL config for asyncpg from bool or PostgreSQL SSL mode string.
+
+    For bool True or mode 'require': creates an explicit SSLContext with
+    certificate verification disabled, which is more compatible with managed
+    databases (AlloyDB, Cloud SQL) than asyncpg's built-in STARTTLS negotiation.
+
+    For string modes like 'prefer', 'verify-ca', 'verify-full': passes
+    through to asyncpg which handles them natively.
+    """
+    # Normalize string booleans
+    if isinstance(ssl_config, str):
+        lower = ssl_config.lower().strip()
+        if lower in ("false", "0", "no", "off", "", "disable"):
+            return None
+        if lower in ("true", "1", "yes", "on", "require"):
+            ctx = ssl_module.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl_module.CERT_NONE
+            return ctx
+        # Other PostgreSQL SSL modes (prefer, allow, verify-ca, verify-full)
+        return ssl_config
+
+    if ssl_config is True:
+        ctx = ssl_module.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl_module.CERT_NONE
+        return ctx
+
+    return None
 
 
 class PostgresPersistence:
@@ -19,7 +52,7 @@ class PostgresPersistence:
         user: str,
         database: str,
         password: str,
-        ssl: bool = False,
+        ssl: bool | str = False,
         table_prefix: str = "worker_",
     ):
         self._host = host
@@ -32,14 +65,15 @@ class PostgresPersistence:
         self._pool: asyncpg.Pool | None = None
 
     async def connect(self) -> None:
-        ssl_mode = "require" if self._ssl else None
+        ssl_param = _build_ssl_context(self._ssl)
+        ssl_display = self._ssl if isinstance(self._ssl, str) else ("require" if self._ssl else "disabled")
         logger.info(
             "[dooers-workers] connecting to postgresql at %s:%s/%s (user=%s, ssl=%s)",
             self._host,
             self._port,
             self._database,
             self._user,
-            ssl_mode,
+            ssl_display,
         )
         try:
             self._pool = await asyncpg.create_pool(
@@ -48,7 +82,7 @@ class PostgresPersistence:
                 user=self._user,
                 database=self._database,
                 password=self._password,
-                ssl=ssl_mode,
+                ssl=ssl_param,
                 min_size=1,
                 max_size=10,
                 timeout=30,
@@ -61,12 +95,12 @@ class PostgresPersistence:
                 self._host,
                 self._port,
                 self._database,
-                ssl_mode,
+                ssl_display,
             )
             raise
         except OSError as e:
             logger.error(
-                "[dooers-workers] cannot reach postgreSQL at %s:%s - %s. ",
+                "[dooers-workers] cannot reach postgresql at %s:%s - %s. ",
                 self._host,
                 self._port,
                 e,
