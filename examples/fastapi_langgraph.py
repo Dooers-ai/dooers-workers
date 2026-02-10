@@ -11,8 +11,8 @@ from dooers import WorkerConfig, WorkerServer
 app = FastAPI()
 worker_server = WorkerServer(
     WorkerConfig(
-        database_url="sqlite:///worker.db",
         database_type="sqlite",
+        database_name="worker.db",
     )
 )
 

@@ -8,13 +8,13 @@ from dooers.protocol.models import DocumentPart, ImagePart, Run, TextPart, Threa
 
 
 class SqlitePersistence:
-    def __init__(self, database_url: str, table_prefix: str = "worker_"):
-        self._database_url = database_url.replace("sqlite:///", "")
+    def __init__(self, *, database_name: str, table_prefix: str = "worker_"):
+        self._database_path = database_name.replace("sqlite:///", "")
         self._prefix = table_prefix
         self._conn: aiosqlite.Connection | None = None
 
     async def connect(self) -> None:
-        self._conn = await aiosqlite.connect(self._database_url)
+        self._conn = await aiosqlite.connect(self._database_path)
         self._conn.row_factory = aiosqlite.Row
 
     async def disconnect(self) -> None:

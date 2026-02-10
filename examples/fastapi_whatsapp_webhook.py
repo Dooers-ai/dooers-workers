@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request, WebSocket
 
 from dooers import TextPart, Thread, WorkerConfig, WorkerServer
 
-worker_server = WorkerServer(WorkerConfig(database_url="sqlite:///worker.db", database_type="sqlite"))
+worker_server = WorkerServer(WorkerConfig(database_type="sqlite", database_name="worker.db"))
 
 app = FastAPI()
 

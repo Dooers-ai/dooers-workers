@@ -48,8 +48,8 @@ settings_schema = SettingsSchema(
 
 worker_server = WorkerServer(
     WorkerConfig(
-        database_url="sqlite:///worker.db",
         database_type="sqlite",
+        database_name="worker.db",
         settings_schema=settings_schema,
     )
 )

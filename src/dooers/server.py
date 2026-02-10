@@ -67,12 +67,17 @@ class WorkerServer:
 
         if self._config.database_type == "sqlite":
             self._persistence = SqlitePersistence(
-                database_url=self._config.database_url,
+                database_name=self._config.database_name,
                 table_prefix=self._config.table_prefix,
             )
         else:
             self._persistence = PostgresPersistence(
-                database_url=self._config.database_url,
+                host=self._config.database_host,
+                port=self._config.database_port,
+                user=self._config.database_user,
+                database=self._config.database_name,
+                password=self._config.database_password,
+                ssl=self._config.database_ssl,
                 table_prefix=self._config.table_prefix,
             )
 

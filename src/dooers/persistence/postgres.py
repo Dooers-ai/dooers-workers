@@ -8,13 +8,35 @@ from dooers.protocol.models import DocumentPart, ImagePart, Run, TextPart, Threa
 
 
 class PostgresPersistence:
-    def __init__(self, database_url: str, table_prefix: str = "worker_"):
-        self._database_url = database_url
+    def __init__(
+        self,
+        *,
+        host: str,
+        port: int,
+        user: str,
+        database: str,
+        password: str,
+        ssl: bool = False,
+        table_prefix: str = "worker_",
+    ):
+        self._host = host
+        self._port = port
+        self._user = user
+        self._database = database
+        self._password = password
+        self._ssl = ssl
         self._prefix = table_prefix
         self._pool: asyncpg.Pool | None = None
 
     async def connect(self) -> None:
-        self._pool = await asyncpg.create_pool(self._database_url)
+        self._pool = await asyncpg.create_pool(
+            host=self._host,
+            port=self._port,
+            user=self._user,
+            database=self._database,
+            password=self._password,
+            ssl="require" if self._ssl else None,
+        )
 
     async def disconnect(self) -> None:
         if self._pool:
