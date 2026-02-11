@@ -88,6 +88,7 @@ class Router:
         settings_broadcaster: SettingsBroadcaster | None = None,
         settings_schema: SettingsSchema | None = None,
         assistant_name: str = "Assistant",
+        private_threads: bool = False,
         analytics_subscriptions: dict[str, set[str]] | None = None,
         settings_subscriptions: dict[str, set[str]] | None = None,
     ):
@@ -101,6 +102,7 @@ class Router:
         self._settings_broadcaster = settings_broadcaster
         self._settings_schema = settings_schema
         self._assistant_name = assistant_name
+        self._private_threads = private_threads
         self._analytics_subscriptions = analytics_subscriptions if analytics_subscriptions is not None else {}
         self._settings_subscriptions = settings_subscriptions if settings_subscriptions is not None else {}
 
@@ -226,10 +228,10 @@ class Router:
             )
             return
 
-        # Filter by worker_id first, then optionally by user_id
+        # Filter by worker_id first, then optionally by user_id if private_threads is enabled
         threads = await self._persistence.list_threads(
             worker_id=self._worker_id,
-            user_id=None,  # Show all threads for this worker (team collaboration)
+            user_id=self._user_id if self._private_threads else None,
             cursor=frame.payload.cursor,
             limit=frame.payload.limit or 30,
         )

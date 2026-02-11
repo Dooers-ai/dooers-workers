@@ -41,6 +41,9 @@ class WorkerConfig:
     database_table_prefix: str = "worker_"
     database_auto_migrate: bool = True
 
+    # Thread privacy - when True, users only see their own threads
+    private_threads: bool = False
+
     # Analytics (optional, defaults from settings.py)
     analytics_enabled: bool = True
     analytics_webhook_url: str | None = None  # Override default webhook URL

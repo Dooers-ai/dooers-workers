@@ -295,3 +295,20 @@ All database fields can be configured via environment variables:
 | `database_password` | `WORKER_DATABASE_PASSWORD` |
 | `database_key` | `WORKER_DATABASE_KEY` |
 | `database_ssl` | `WORKER_DATABASE_SSL` |
+
+## Thread Privacy
+
+By default, all users connected to a worker can see all threads (team collaboration mode). Enable `private_threads` to restrict users to only their own threads:
+
+```python
+worker_server = WorkerServer(WorkerConfig(
+    database_type="postgres",
+    database_name="mydb",
+    private_threads=True,  # Users only see their own threads
+))
+```
+
+When `private_threads=True`:
+- Thread listing (`thread.list`) filters by the connected user's `user_id`
+- Each user only sees threads they created
+- Useful for multi-tenant or personal assistant scenarios

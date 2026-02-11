@@ -141,6 +141,7 @@ class WorkerServer:
             settings_broadcaster=self._settings_broadcaster,
             settings_schema=self._config.settings_schema,
             assistant_name=self._config.assistant_name,
+            private_threads=self._config.private_threads,
             analytics_subscriptions=self._analytics_subscriptions,
             settings_subscriptions=self._settings_subscriptions,
         )
