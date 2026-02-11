@@ -1,3 +1,5 @@
+import uuid
+
 import httpx
 from fastapi import FastAPI, WebSocket
 
@@ -8,6 +10,7 @@ worker_server = WorkerServer(
     WorkerConfig(
         database_type="sqlite",
         database_name="worker.db",
+        assistant_name="Search Agent",
     )
 )
 
@@ -21,14 +24,33 @@ async def search_web(query: str) -> dict:
         return resp.json()
 
 
-async def tool_agent(request, response, memory):
+async def tool_agent(request, response, memory, analytics, settings):
     yield response.run_start(agent_id="tool-agent")
 
     if request.message.lower().startswith("search "):
         query = request.message[7:]
-        yield response.tool_call("web_search", {"query": query})
+        args = {"query": query}
+
+        # Generate correlation ID for tool call/result pairing
+        call_id = str(uuid.uuid4())
+
+        # Emit tool call with display_name for frontend rendering
+        yield response.tool_call(
+            "web_search",
+            args,
+            display_name="Searching the web...",
+            id=call_id,
+        )
+
         results = await search_web(query)
-        yield response.tool_result("web_search", {"results": results})
+
+        # Emit tool result with same ID for correlation
+        yield response.tool_result(
+            "web_search",
+            {"results": results},
+            args=args,  # Echo args for self-contained rendering
+            id=call_id,
+        )
 
         if results.get("Abstract"):
             yield response.text(results["Abstract"])

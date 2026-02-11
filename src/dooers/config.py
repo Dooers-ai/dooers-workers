@@ -21,7 +21,10 @@ def _parse_ssl(value: str) -> bool | str:
 
 @dataclass
 class WorkerConfig:
-    database_type: Literal["postgres", "sqlite"]
+    database_type: Literal["postgres", "sqlite", "cosmos"]
+
+    # Display name for assistant responses
+    assistant_name: str = "Assistant"
 
     # Database connection fields (defaults from WORKER_DATABASE_* env vars)
     database_host: str = field(default_factory=lambda: os.environ.get("WORKER_DATABASE_HOST", "localhost"))
@@ -42,3 +45,8 @@ class WorkerConfig:
 
     # Settings
     settings_schema: "SettingsSchema | None" = None
+
+    # Cosmos DB specific (defaults from WORKER_COSMOS_* env vars)
+    cosmos_endpoint: str = field(default_factory=lambda: os.environ.get("WORKER_COSMOS_ENDPOINT", ""))
+    cosmos_key: str = field(default_factory=lambda: os.environ.get("WORKER_COSMOS_KEY", ""))
+    cosmos_database: str = field(default_factory=lambda: os.environ.get("WORKER_COSMOS_DATABASE", ""))

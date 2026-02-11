@@ -46,6 +46,7 @@ class SqlitePersistence:
                 run_id TEXT,
                 type TEXT NOT NULL,
                 actor TEXT NOT NULL,
+                author TEXT,
                 user_id TEXT,
                 user_name TEXT,
                 user_email TEXT,
@@ -179,24 +180,27 @@ class SqlitePersistence:
             raise RuntimeError("Not connected")
 
         table = f"{self._prefix}threads"
+        conditions = ["worker_id = ?"]
+        params: list[Any] = [worker_id]
 
         if user_id:
-            query = f"""
-                SELECT * FROM {table}
-                WHERE worker_id = ? AND user_id = ?
-                ORDER BY last_event_at DESC
-                LIMIT ?
-            """
-            cursor_result = await self._conn.execute(query, (worker_id, user_id, limit))
-        else:
-            query = f"""
-                SELECT * FROM {table}
-                WHERE worker_id = ?
-                ORDER BY last_event_at DESC
-                LIMIT ?
-            """
-            cursor_result = await self._conn.execute(query, (worker_id, limit))
+            conditions.append("user_id = ?")
+            params.append(user_id)
 
+        if cursor:
+            conditions.append("last_event_at < ?")
+            params.append(cursor)
+
+        params.append(limit)
+        where = " AND ".join(conditions)
+
+        query = f"""
+            SELECT * FROM {table}
+            WHERE {where}
+            ORDER BY last_event_at DESC
+            LIMIT ?
+        """
+        cursor_result = await self._conn.execute(query, tuple(params))
         rows = await cursor_result.fetchall()
 
         return [
@@ -225,8 +229,8 @@ class SqlitePersistence:
 
         await self._conn.execute(
             f"""
-            INSERT INTO {table} (id, thread_id, run_id, type, actor, user_id, user_name, user_email, content, data, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO {table} (id, thread_id, run_id, type, actor, author, user_id, user_name, user_email, content, data, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event.id,
@@ -234,6 +238,7 @@ class SqlitePersistence:
                 event.run_id,
                 event.type,
                 event.actor,
+                event.author,
                 event.user_id,
                 event.user_name,
                 event.user_email,
@@ -300,6 +305,7 @@ class SqlitePersistence:
             run_id=row["run_id"],
             type=row["type"],
             actor=row["actor"],
+            author=row["author"] if "author" in row.keys() else None,
             user_id=row["user_id"],
             user_name=row["user_name"],
             user_email=row["user_email"],

@@ -87,6 +87,7 @@ class Router:
         analytics_collector: AnalyticsCollector | None = None,
         settings_broadcaster: SettingsBroadcaster | None = None,
         settings_schema: SettingsSchema | None = None,
+        assistant_name: str = "Assistant",
         analytics_subscriptions: dict[str, set[str]] | None = None,
         settings_subscriptions: dict[str, set[str]] | None = None,
     ):
@@ -99,6 +100,7 @@ class Router:
         self._analytics_collector = analytics_collector
         self._settings_broadcaster = settings_broadcaster
         self._settings_schema = settings_schema
+        self._assistant_name = assistant_name
         self._analytics_subscriptions = analytics_subscriptions if analytics_subscriptions is not None else {}
         self._settings_subscriptions = settings_subscriptions if settings_subscriptions is not None else {}
 
@@ -530,6 +532,7 @@ class Router:
                         run_id=current_run_id,
                         type="message",
                         actor="assistant",
+                        author=event.data.get("author") or self._assistant_name,
                         user_id=None,
                         user_name=None,
                         user_email=None,
@@ -561,6 +564,7 @@ class Router:
                         run_id=current_run_id,
                         type="message",
                         actor="assistant",
+                        author=event.data.get("author") or self._assistant_name,
                         user_id=None,
                         user_name=None,
                         user_email=None,
@@ -598,6 +602,7 @@ class Router:
                         run_id=current_run_id,
                         type="message",
                         actor="assistant",
+                        author=event.data.get("author") or self._assistant_name,
                         user_id=None,
                         user_name=None,
                         user_email=None,
@@ -639,7 +644,9 @@ class Router:
                         user_name=None,
                         user_email=None,
                         data={
+                            "id": event.data["id"],
                             "name": event.data["name"],
+                            "display_name": event.data.get("display_name"),
                             "args": event.data["args"],
                         },
                         created_at=event_now,
@@ -672,7 +679,10 @@ class Router:
                         user_name=None,
                         user_email=None,
                         data={
+                            "id": event.data.get("id"),
                             "name": event.data["name"],
+                            "display_name": event.data.get("display_name"),
+                            "args": event.data.get("args"),
                             "result": event.data["result"],
                         },
                         created_at=event_now,

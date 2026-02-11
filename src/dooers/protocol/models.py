@@ -42,6 +42,7 @@ class ThreadEvent(BaseModel):
     run_id: str | None = None
     type: EventType
     actor: Actor
+    author: str | None = None
     user_id: str | None = None
     user_name: str | None = None
     user_email: str | None = None

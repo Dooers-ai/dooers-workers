@@ -25,8 +25,9 @@ app = FastAPI()
 openai = AsyncOpenAI()
 
 worker_server = WorkerServer(WorkerConfig(
-    database_url="sqlite:///worker.db",
     database_type="sqlite",
+    database_name="worker.db",
+    assistant_name="My Assistant",  # Display name for assistant responses
 ))
 
 
@@ -44,6 +45,8 @@ async def agent_handler(request, response, memory, analytics, settings):
     )
 
     yield response.text(completion.choices[0].message.content)
+    # Or override author for specific messages:
+    # yield response.text("Hello!", author="Support Bot")
     yield response.run_end()
 
 
@@ -100,11 +103,22 @@ events = await memory.get_history_raw(limit=50, order="desc", filters={"type": "
 ### Response
 
 ```python
+# Messages - with optional author override
 yield response.text("Hello, I'm your assistant.")
-yield response.image(url, mime_type?, alt?)
-yield response.document(url, filename, mime_type)
-yield response.tool_call(name, args)
-yield response.tool_result(name, result)
+yield response.text("Hello!", author="Support Bot")  # Override default assistant_name
+yield response.image(url, mime_type?, alt?, author?)
+yield response.document(url, filename, mime_type, author?)
+
+# Tool calls - with correlation ID for frontend rendering
+call_id = str(uuid.uuid4())
+yield response.tool_call(name, args, display_name?, id?)
+yield response.tool_result(name, result, args?, display_name?, id?)
+
+# Example: correlated tool call
+yield response.tool_call("search", {"q": "hello"}, display_name="Searching...", id=call_id)
+yield response.tool_result("search", {"results": [...]}, args={"q": "hello"}, id=call_id)
+
+# Run lifecycle
 yield response.run_start(agent_id?)
 yield response.run_end(status?, error?)
 ```
@@ -204,8 +218,9 @@ schema = SettingsSchema(
 )
 
 worker_server = WorkerServer(WorkerConfig(
-    database_url="sqlite:///worker.db",
     database_type="sqlite",
+    database_name="worker.db",
+    assistant_name="Settings Bot",
     settings_schema=schema,
 ))
 ```

@@ -1,4 +1,5 @@
 import json
+import uuid
 
 from agents import Agent, Runner, function_tool
 from fastapi import FastAPI, WebSocket
@@ -10,6 +11,7 @@ worker_server = WorkerServer(
     WorkerConfig(
         database_type="sqlite",
         database_name="worker.db",
+        assistant_name="OpenAI Agent",
     )
 )
 
@@ -27,7 +29,7 @@ agent = Agent(
 )
 
 
-async def openai_agents_handler(request, response, memory):
+async def openai_agents_handler(request, response, memory, analytics, settings):
     yield response.run_start(agent_id="openai-agents")
 
     history = await memory.get_history(limit=20)
@@ -44,14 +46,27 @@ async def openai_agents_handler(request, response, memory):
 
     result = await Runner.run(agent, input=input_messages)
 
+    # Track tool call IDs for correlation
+    tool_call_ids: dict[str, str] = {}
+
     for item in result.new_items:
         if item.type == "tool_call_item":
+            call_id = str(uuid.uuid4())
+            args = json.loads(item.raw_item.arguments)
+            tool_call_ids[item.raw_item.call_id] = call_id
             yield response.tool_call(
                 item.raw_item.name,
-                json.loads(item.raw_item.arguments),
+                args,
+                display_name=f"Calling {item.raw_item.name}...",
+                id=call_id,
             )
         elif item.type == "tool_call_output_item":
-            yield response.tool_result("tool", {"output": item.output})
+            call_id = tool_call_ids.get(item.raw_item.call_id)
+            yield response.tool_result(
+                item.raw_item.name,
+                {"output": item.output},
+                id=call_id,
+            )
 
     yield response.text(result.final_output)
     yield response.run_end()

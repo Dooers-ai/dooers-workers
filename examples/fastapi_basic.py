@@ -7,13 +7,17 @@ worker_server = WorkerServer(
     WorkerConfig(
         database_type="sqlite",
         database_name="worker.db",
+        assistant_name="Echo Bot",  # Default display name for assistant messages
     )
 )
 
 
-async def echo_agent(request, response, memory):
+async def echo_agent(request, response, memory, analytics, settings):
     yield response.run_start(agent_id="echo")
+    # Uses default assistant_name ("Echo Bot") as author
     yield response.text(f"You said: {request.message}")
+    # Or override author for specific messages:
+    # yield response.text("System notice", author="System")
     yield response.run_end()
 
 

@@ -156,6 +156,7 @@ class PostgresPersistence:
                     run_id TEXT,
                     type TEXT NOT NULL,
                     actor TEXT NOT NULL,
+                    author TEXT,
                     user_id TEXT,
                     user_name TEXT,
                     user_email TEXT,
@@ -186,6 +187,9 @@ class PostgresPersistence:
             """)
             await conn.execute(f"""
                 ALTER TABLE {events_table} ADD COLUMN IF NOT EXISTS user_email TEXT
+            """)
+            await conn.execute(f"""
+                ALTER TABLE {events_table} ADD COLUMN IF NOT EXISTS author TEXT
             """)
 
             await conn.execute(f"""
@@ -315,30 +319,32 @@ class PostgresPersistence:
             raise RuntimeError("Not connected")
 
         table = f"{self._prefix}threads"
+        conditions = ["worker_id = $1"]
+        params: list[Any] = [worker_id]
+        idx = 2
+
+        if user_id:
+            conditions.append(f"user_id = ${idx}")
+            params.append(user_id)
+            idx += 1
+
+        if cursor:
+            conditions.append(f"last_event_at < ${idx}")
+            params.append(datetime.fromisoformat(cursor))
+            idx += 1
+
+        params.append(limit)
+        where = " AND ".join(conditions)
+
+        query = f"""
+            SELECT * FROM {table}
+            WHERE {where}
+            ORDER BY last_event_at DESC
+            LIMIT ${idx}
+        """
+
         async with self._pool.acquire() as conn:
-            if user_id:
-                rows = await conn.fetch(
-                    f"""
-                    SELECT * FROM {table}
-                    WHERE worker_id = $1 AND user_id = $2
-                    ORDER BY last_event_at DESC
-                    LIMIT $3
-                    """,
-                    worker_id,
-                    user_id,
-                    limit,
-                )
-            else:
-                rows = await conn.fetch(
-                    f"""
-                    SELECT * FROM {table}
-                    WHERE worker_id = $1
-                    ORDER BY last_event_at DESC
-                    LIMIT $2
-                    """,
-                    worker_id,
-                    limit,
-                )
+            rows = await conn.fetch(query, *params)
 
         return [
             Thread(
@@ -367,14 +373,15 @@ class PostgresPersistence:
         async with self._pool.acquire() as conn:
             await conn.execute(
                 f"""
-                INSERT INTO {table} (id, thread_id, run_id, type, actor, user_id, user_name, user_email, content, data, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                INSERT INTO {table} (id, thread_id, run_id, type, actor, author, user_id, user_name, user_email, content, data, created_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                 """,
                 event.id,
                 event.thread_id,
                 event.run_id,
                 event.type,
                 event.actor,
+                event.author,
                 event.user_id,
                 event.user_name,
                 event.user_email,
@@ -443,6 +450,7 @@ class PostgresPersistence:
             run_id=row["run_id"],
             type=row["type"],
             actor=row["actor"],
+            author=row.get("author"),
             user_id=row["user_id"],
             user_name=row["user_name"],
             user_email=row["user_email"],

@@ -1,6 +1,6 @@
 [project]
 name = "dooers-workers"
-version = "0.2.5"
+version = "0.3.0"
 description = "dooers.ai SDK for creating agent workers"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -28,6 +28,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+cosmos = [
+    "azure-cosmos>=4.7.0",
+]
 dev = [
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",

@@ -67,6 +67,15 @@ class WorkerServer:
                 database_name=self._config.database_name,
                 table_prefix=self._config.table_prefix,
             )
+        elif self._config.database_type == "cosmos":
+            from dooers.persistence.cosmos import CosmosPersistence
+
+            self._persistence = CosmosPersistence(
+                endpoint=self._config.cosmos_endpoint,
+                key=self._config.cosmos_key,
+                database=self._config.cosmos_database,
+                table_prefix=self._config.table_prefix,
+            )
         else:
             self._persistence = PostgresPersistence(
                 host=self._config.database_host,
@@ -131,6 +140,7 @@ class WorkerServer:
             analytics_collector=self._analytics_collector,
             settings_broadcaster=self._settings_broadcaster,
             settings_schema=self._config.settings_schema,
+            assistant_name=self._config.assistant_name,
             analytics_subscriptions=self._analytics_subscriptions,
             settings_subscriptions=self._settings_subscriptions,
         )
