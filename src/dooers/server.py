@@ -65,16 +65,16 @@ class WorkerServer:
         if self._config.database_type == "sqlite":
             self._persistence = SqlitePersistence(
                 database_name=self._config.database_name,
-                table_prefix=self._config.table_prefix,
+                table_prefix=self._config.database_table_prefix,
             )
         elif self._config.database_type == "cosmos":
             from dooers.persistence.cosmos import CosmosPersistence
 
             self._persistence = CosmosPersistence(
-                endpoint=self._config.cosmos_endpoint,
-                key=self._config.cosmos_key,
-                database=self._config.cosmos_database,
-                table_prefix=self._config.table_prefix,
+                endpoint=self._config.database_host,
+                key=self._config.database_key,
+                database=self._config.database_name,
+                table_prefix=self._config.database_table_prefix,
             )
         else:
             self._persistence = PostgresPersistence(
@@ -84,12 +84,12 @@ class WorkerServer:
                 database=self._config.database_name,
                 password=self._config.database_password,
                 ssl=self._config.database_ssl,
-                table_prefix=self._config.table_prefix,
+                table_prefix=self._config.database_table_prefix,
             )
 
         await self._persistence.connect()
 
-        if self._config.auto_migrate:
+        if self._config.database_auto_migrate:
             await self._persistence.migrate()
 
         # Initialize broadcast manager

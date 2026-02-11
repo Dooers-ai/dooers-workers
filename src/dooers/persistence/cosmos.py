@@ -45,7 +45,7 @@ class CosmosPersistence:
         if not endpoint or not key or not database:
             raise ValueError(
                 "Cosmos DB requires endpoint, key, and database configuration. "
-                "Set WORKER_COSMOS_ENDPOINT, WORKER_COSMOS_KEY, and WORKER_COSMOS_DATABASE "
+                "Set WORKER_DATABASE_HOST (endpoint), WORKER_DATABASE_KEY, and WORKER_DATABASE_NAME "
                 "environment variables or pass them to WorkerConfig."
             )
 

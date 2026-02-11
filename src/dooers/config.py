@@ -27,15 +27,19 @@ class WorkerConfig:
     assistant_name: str = "Assistant"
 
     # Database connection fields (defaults from WORKER_DATABASE_* env vars)
+    # For postgres: host, port, user, name, password, ssl
+    # For sqlite: name (file path)
+    # For cosmos: host (endpoint), name (database), key
     database_host: str = field(default_factory=lambda: os.environ.get("WORKER_DATABASE_HOST", "localhost"))
     database_port: int = field(default_factory=lambda: int(os.environ.get("WORKER_DATABASE_PORT", "5432")))
     database_user: str = field(default_factory=lambda: os.environ.get("WORKER_DATABASE_USER", "postgres"))
     database_name: str = field(default_factory=lambda: os.environ.get("WORKER_DATABASE_NAME", ""))
     database_password: str = field(default_factory=lambda: os.environ.get("WORKER_DATABASE_PASSWORD", ""))
+    database_key: str = field(default_factory=lambda: os.environ.get("WORKER_DATABASE_KEY", ""))  # For cosmos auth
     database_ssl: bool | str = field(default_factory=lambda: _parse_ssl(os.environ.get("WORKER_DATABASE_SSL", "false")))
 
-    table_prefix: str = "worker_"
-    auto_migrate: bool = True
+    database_table_prefix: str = "worker_"
+    database_auto_migrate: bool = True
 
     # Analytics (optional, defaults from settings.py)
     analytics_enabled: bool = True
@@ -45,8 +49,3 @@ class WorkerConfig:
 
     # Settings
     settings_schema: "SettingsSchema | None" = None
-
-    # Cosmos DB specific (defaults from WORKER_COSMOS_* env vars)
-    cosmos_endpoint: str = field(default_factory=lambda: os.environ.get("WORKER_COSMOS_ENDPOINT", ""))
-    cosmos_key: str = field(default_factory=lambda: os.environ.get("WORKER_COSMOS_KEY", ""))
-    cosmos_database: str = field(default_factory=lambda: os.environ.get("WORKER_COSMOS_DATABASE", ""))

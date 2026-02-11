@@ -44,9 +44,8 @@ async def agent_handler(request, response, memory, analytics, settings):
         ],
     )
 
-    yield response.text(completion.choices[0].message.content)
-    # Or override author for specific messages:
-    # yield response.text("Hello!", author="Support Bot")
+    yield response.text("Hello!", author="Support Bot")
+    yield response.text(completion.choices[0].message.content) 
     yield response.run_end()
 
 
@@ -236,3 +235,63 @@ worker_server = WorkerServer(WorkerConfig(
 - `EMAIL` - Email input
 - `DATE` - Date picker
 - `IMAGE` - Display-only image (e.g., QR codes)
+
+## Database Configuration
+
+The SDK supports three database backends: PostgreSQL, SQLite, and Azure Cosmos DB.
+
+### PostgreSQL (default)
+
+```python
+worker_server = WorkerServer(WorkerConfig(
+    database_type="postgres",
+    database_host="localhost",
+    database_port=5432,
+    database_user="postgres",
+    database_name="mydb",
+    database_password="secret",
+    database_ssl=False,  # or "require", "verify-full", etc.
+    database_table_prefix="worker_",
+    database_auto_migrate=True,
+))
+```
+
+### SQLite
+
+```python
+worker_server = WorkerServer(WorkerConfig(
+    database_type="sqlite",
+    database_name="worker.db",
+    database_table_prefix="worker_",
+    database_auto_migrate=True,
+))
+```
+
+### Azure Cosmos DB
+
+Requires the cosmos extra: `pip install dooers-workers[cosmos]`
+
+```python
+worker_server = WorkerServer(WorkerConfig(
+    database_type="cosmos",
+    database_host="https://your-account.documents.azure.com:443/",  # endpoint
+    database_name="your-database",
+    database_key="your-cosmos-key",
+    database_table_prefix="worker_",
+    database_auto_migrate=True,
+))
+```
+
+### Environment Variables
+
+All database fields can be configured via environment variables:
+
+| Field | Environment Variable |
+|-------|---------------------|
+| `database_host` | `WORKER_DATABASE_HOST` |
+| `database_port` | `WORKER_DATABASE_PORT` |
+| `database_user` | `WORKER_DATABASE_USER` |
+| `database_name` | `WORKER_DATABASE_NAME` |
+| `database_password` | `WORKER_DATABASE_PASSWORD` |
+| `database_key` | `WORKER_DATABASE_KEY` |
+| `database_ssl` | `WORKER_DATABASE_SSL` |
