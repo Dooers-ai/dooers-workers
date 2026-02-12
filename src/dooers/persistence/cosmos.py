@@ -126,6 +126,8 @@ class CosmosPersistence:
         doc = {
             "id": thread.id,
             "worker_id": thread.worker_id,
+            "organization_id": thread.organization_id,
+            "workspace_id": thread.workspace_id,
             "user_id": thread.user_id,
             "title": thread.title,
             "created_at": thread.created_at.isoformat(),
@@ -146,7 +148,9 @@ class CosmosPersistence:
                 return Thread(
                     id=row["id"],
                     worker_id=row["worker_id"],
-                    user_id=row.get("user_id"),
+                    organization_id=row["organization_id"],
+                    workspace_id=row["workspace_id"],
+                    user_id=row["user_id"],
                     title=row.get("title"),
                     created_at=datetime.fromisoformat(row["created_at"]),
                     updated_at=datetime.fromisoformat(row["updated_at"]),
@@ -172,7 +176,9 @@ class CosmosPersistence:
         return Thread(
             id=row["id"],
             worker_id=row["worker_id"],
-            user_id=row.get("user_id"),
+            organization_id=row["organization_id"],
+            workspace_id=row["workspace_id"],
+            user_id=row["user_id"],
             title=row.get("title"),
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
@@ -184,6 +190,8 @@ class CosmosPersistence:
         doc = {
             "id": thread.id,
             "worker_id": thread.worker_id,
+            "organization_id": thread.organization_id,
+            "workspace_id": thread.workspace_id,
             "user_id": thread.user_id,
             "title": thread.title,
             "created_at": thread.created_at.isoformat(),
@@ -226,15 +234,23 @@ class CosmosPersistence:
     async def list_threads(
         self,
         worker_id: str,
+        organization_id: str,
+        workspace_id: str,
         user_id: str | None,
         cursor: str | None,
         limit: int,
     ) -> list[Thread]:
         container = self._get_container("threads")
 
-        conditions = ["c.worker_id = @worker_id"]
+        conditions = [
+            "c.worker_id = @worker_id",
+            "c.organization_id = @organization_id",
+            "c.workspace_id = @workspace_id",
+        ]
         params = [
             {"name": "@worker_id", "value": worker_id},
+            {"name": "@organization_id", "value": organization_id},
+            {"name": "@workspace_id", "value": workspace_id},
         ]
 
         if user_id:
@@ -268,7 +284,9 @@ class CosmosPersistence:
             Thread(
                 id=row["id"],
                 worker_id=row["worker_id"],
-                user_id=row.get("user_id"),
+                organization_id=row["organization_id"],
+                workspace_id=row["workspace_id"],
+                user_id=row["user_id"],
                 title=row.get("title"),
                 created_at=datetime.fromisoformat(row["created_at"]),
                 updated_at=datetime.fromisoformat(row["updated_at"]),

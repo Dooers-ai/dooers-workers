@@ -18,6 +18,8 @@ class Persistence(Protocol):
     async def list_threads(
         self,
         worker_id: str,
+        organization_id: str,
+        workspace_id: str,
         user_id: str | None,
         cursor: str | None,
         limit: int,

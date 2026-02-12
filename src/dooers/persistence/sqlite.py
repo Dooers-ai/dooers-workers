@@ -33,7 +33,9 @@ class SqlitePersistence:
             CREATE TABLE IF NOT EXISTS {threads_table} (
                 id TEXT PRIMARY KEY,
                 worker_id TEXT NOT NULL,
-                user_id TEXT,
+                organization_id TEXT NOT NULL,
+                workspace_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
                 title TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -71,6 +73,10 @@ class SqlitePersistence:
                 ON {threads_table}(worker_id);
             CREATE INDEX IF NOT EXISTS idx_{self._prefix}threads_user_id
                 ON {threads_table}(user_id);
+            CREATE INDEX IF NOT EXISTS idx_{self._prefix}threads_organization_id
+                ON {threads_table}(organization_id);
+            CREATE INDEX IF NOT EXISTS idx_{self._prefix}threads_workspace_id
+                ON {threads_table}(workspace_id);
             CREATE INDEX IF NOT EXISTS idx_{self._prefix}events_thread_id
                 ON {events_table}(thread_id);
             CREATE INDEX IF NOT EXISTS idx_{self._prefix}events_user_id
@@ -96,12 +102,14 @@ class SqlitePersistence:
         table = f"{self._prefix}threads"
         await self._conn.execute(
             f"""
-            INSERT INTO {table} (id, worker_id, user_id, title, created_at, updated_at, last_event_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO {table} (id, worker_id, organization_id, workspace_id, user_id, title, created_at, updated_at, last_event_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 thread.id,
                 thread.worker_id,
+                thread.organization_id,
+                thread.workspace_id,
                 thread.user_id,
                 thread.title,
                 thread.created_at.isoformat(),
@@ -128,6 +136,8 @@ class SqlitePersistence:
         return Thread(
             id=row["id"],
             worker_id=row["worker_id"],
+            organization_id=row["organization_id"],
+            workspace_id=row["workspace_id"],
             user_id=row["user_id"],
             title=row["title"],
             created_at=datetime.fromisoformat(row["created_at"]),
@@ -143,10 +153,12 @@ class SqlitePersistence:
         await self._conn.execute(
             f"""
             UPDATE {table}
-            SET user_id = ?, title = ?, updated_at = ?, last_event_at = ?
+            SET organization_id = ?, workspace_id = ?, user_id = ?, title = ?, updated_at = ?, last_event_at = ?
             WHERE id = ?
             """,
             (
+                thread.organization_id,
+                thread.workspace_id,
                 thread.user_id,
                 thread.title,
                 thread.updated_at.isoformat(),
@@ -172,6 +184,8 @@ class SqlitePersistence:
     async def list_threads(
         self,
         worker_id: str,
+        organization_id: str,
+        workspace_id: str,
         user_id: str | None,
         cursor: str | None,
         limit: int,
@@ -180,8 +194,8 @@ class SqlitePersistence:
             raise RuntimeError("Not connected")
 
         table = f"{self._prefix}threads"
-        conditions = ["worker_id = ?"]
-        params: list[Any] = [worker_id]
+        conditions = ["worker_id = ?", "organization_id = ?", "workspace_id = ?"]
+        params: list[Any] = [worker_id, organization_id, workspace_id]
 
         if user_id:
             conditions.append("user_id = ?")
@@ -207,6 +221,8 @@ class SqlitePersistence:
             Thread(
                 id=row["id"],
                 worker_id=row["worker_id"],
+                organization_id=row["organization_id"],
+                workspace_id=row["workspace_id"],
                 user_id=row["user_id"],
                 title=row["title"],
                 created_at=datetime.fromisoformat(row["created_at"]),

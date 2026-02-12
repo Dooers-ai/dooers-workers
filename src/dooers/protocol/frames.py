@@ -18,9 +18,12 @@ class WSFrame(BaseModel, Generic[T]):
 
 class ConnectPayload(BaseModel):
     worker_id: str
+    organization_id: str
+    workspace_id: str
     user_id: str
     user_name: str
     user_email: str
+    user_role: str  # "owner", "manager", "member"
     auth_token: str | None = None
     client: dict | None = None
 

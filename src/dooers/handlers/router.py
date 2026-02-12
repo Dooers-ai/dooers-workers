@@ -110,9 +110,12 @@ class Router:
         self._ws: WebSocketProtocol | None = None
         self._ws_id: str = _generate_id()  # Unique ID for this connection
         self._worker_id: str | None = None
+        self._organization_id: str | None = None
+        self._workspace_id: str | None = None
         self._user_id: str | None = None
         self._user_name: str | None = None
         self._user_email: str | None = None
+        self._user_role: str | None = None
         self._subscribed_threads: set[str] = set()
 
     async def _send(self, ws: WebSocketProtocol, frame: ServerToClient) -> None:
@@ -205,9 +208,12 @@ class Router:
     async def _handle_connect(self, ws: WebSocketProtocol, frame: C2S_Connect) -> None:
         # Extract identity from payload
         self._worker_id = frame.payload.worker_id
+        self._organization_id = frame.payload.organization_id
+        self._workspace_id = frame.payload.workspace_id
         self._user_id = frame.payload.user_id
         self._user_name = frame.payload.user_name
         self._user_email = frame.payload.user_email
+        self._user_role = frame.payload.user_role
         self._ws = ws
 
         # Register connection in registry
@@ -228,9 +234,12 @@ class Router:
             )
             return
 
-        # Filter by worker_id first, then optionally by user_id if private_threads is enabled
+        # Filter by worker_id, organization_id, workspace_id
+        # Optionally filter by user_id if private_threads is enabled
         threads = await self._persistence.list_threads(
             worker_id=self._worker_id,
+            organization_id=self._organization_id or "",
+            workspace_id=self._workspace_id or "",
             user_id=self._user_id if self._private_threads else None,
             cursor=frame.payload.cursor,
             limit=frame.payload.limit or 30,
@@ -369,7 +378,9 @@ class Router:
             thread = Thread(
                 id=thread_id,
                 worker_id=self._worker_id,
-                user_id=self._user_id,
+                organization_id=self._organization_id or "",
+                workspace_id=self._workspace_id or "",
+                user_id=self._user_id or "",
                 title=None,
                 created_at=now,
                 updated_at=now,
@@ -452,9 +463,14 @@ class Router:
             content=content_parts,
             thread_id=thread_id,
             event_id=user_event_id,
-            user_id=self._user_id,
-            user_name=self._user_name,
-            user_email=self._user_email,
+            organization_id=self._organization_id or "",
+            workspace_id=self._workspace_id or "",
+            user_id=self._user_id or "",
+            user_name=self._user_name or "",
+            user_email=self._user_email or "",
+            user_role=self._user_role or "",
+            thread_title=thread.title if thread else None,
+            thread_created_at=thread.created_at if thread else None,
         )
         response = WorkerResponse()
         memory = WorkerMemory(thread_id=thread_id, persistence=self._persistence)
@@ -697,7 +713,21 @@ class Router:
                     )
                     await self._broadcast_to_worker(append)
 
-                await self._update_thread_last_event(thread_id, event_now)
+                elif event.response_type == "thread_update":
+                    thread = await self._persistence.get_thread(thread_id)
+                    if thread:
+                        if event.data.get("title") is not None:
+                            thread.title = event.data["title"]
+                        thread.updated_at = event_now
+                        await self._persistence.update_thread(thread)
+                        thread_upsert = S2C_ThreadUpsert(
+                            id=_generate_id(),
+                            payload=ThreadUpsertPayload(thread=thread),
+                        )
+                        await self._broadcast_to_worker(thread_upsert)
+
+                if event.response_type != "thread_update":
+                    await self._update_thread_last_event(thread_id, event_now)
 
         except Exception as e:
             # Track error.occurred

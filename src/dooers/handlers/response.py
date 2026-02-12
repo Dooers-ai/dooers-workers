@@ -91,3 +91,9 @@ class WorkerResponse:
             response_type="run_end",
             data={"status": status, "error": error},
         )
+
+    def update_thread(self, *, title: str | None = None) -> WorkerEvent:
+        return WorkerEvent(
+            response_type="thread_update",
+            data={"title": title},
+        )

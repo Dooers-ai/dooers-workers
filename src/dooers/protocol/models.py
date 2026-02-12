@@ -56,7 +56,9 @@ class ThreadEvent(BaseModel):
 class Thread(BaseModel):
     id: str
     worker_id: str
-    user_id: str | None = None
+    organization_id: str
+    workspace_id: str
+    user_id: str
     title: str | None = None
     created_at: datetime
     updated_at: datetime

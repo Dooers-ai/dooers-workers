@@ -143,7 +143,9 @@ class BroadcastManager:
     async def create_thread_and_broadcast(
         self,
         worker_id: str,
-        user_id: str | None = None,
+        organization_id: str,
+        workspace_id: str,
+        user_id: str,
         title: str | None = None,
     ) -> tuple[Thread, int]:
         """
@@ -151,7 +153,9 @@ class BroadcastManager:
 
         Args:
             worker_id: The worker instance
-            user_id: Optional user who owns the thread
+            organization_id: Organization identifier
+            workspace_id: Workspace identifier
+            user_id: User who owns the thread
             title: Optional thread title
 
         Returns:
@@ -161,6 +165,8 @@ class BroadcastManager:
         thread = Thread(
             id=_generate_id(),
             worker_id=worker_id,
+            organization_id=organization_id,
+            workspace_id=workspace_id,
             user_id=user_id,
             title=title,
             created_at=now,

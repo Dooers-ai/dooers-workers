@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 
 from dooers.protocol.models import ContentPart
 
@@ -9,6 +10,11 @@ class WorkerRequest:
     content: list[ContentPart]
     thread_id: str
     event_id: str
-    user_id: str | None
-    user_name: str | None
-    user_email: str | None
+    organization_id: str
+    workspace_id: str
+    user_id: str
+    user_name: str
+    user_email: str
+    user_role: str  # "owner", "manager", "member"
+    thread_title: str | None = field(default=None)
+    thread_created_at: datetime | None = field(default=None)

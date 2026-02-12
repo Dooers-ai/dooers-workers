@@ -141,7 +141,9 @@ class PostgresPersistence:
                 CREATE TABLE IF NOT EXISTS {threads_table} (
                     id TEXT PRIMARY KEY,
                     worker_id TEXT NOT NULL,
-                    user_id TEXT,
+                    organization_id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
                     title TEXT,
                     created_at TIMESTAMPTZ NOT NULL,
                     updated_at TIMESTAMPTZ NOT NULL,
@@ -192,6 +194,16 @@ class PostgresPersistence:
                 ALTER TABLE {events_table} ADD COLUMN IF NOT EXISTS author TEXT
             """)
 
+            # v0.5.0: Add organization_id and workspace_id to threads (multi-tenant support)
+            await conn.execute(f"""
+                ALTER TABLE {threads_table} ADD COLUMN IF NOT EXISTS organization_id TEXT
+            """)
+            await conn.execute(f"""
+                ALTER TABLE {threads_table} ADD COLUMN IF NOT EXISTS workspace_id TEXT
+            """)
+            # Make user_id NOT NULL for new records (existing may have NULL)
+            # Note: For existing databases with NULL values, manual migration may be needed
+
             await conn.execute(f"""
                 CREATE INDEX IF NOT EXISTS idx_{self._prefix}threads_worker_id
                     ON {threads_table}(worker_id)
@@ -200,6 +212,16 @@ class PostgresPersistence:
             await conn.execute(f"""
                 CREATE INDEX IF NOT EXISTS idx_{self._prefix}threads_user_id
                     ON {threads_table}(user_id)
+            """)
+
+            await conn.execute(f"""
+                CREATE INDEX IF NOT EXISTS idx_{self._prefix}threads_organization_id
+                    ON {threads_table}(organization_id)
+            """)
+
+            await conn.execute(f"""
+                CREATE INDEX IF NOT EXISTS idx_{self._prefix}threads_workspace_id
+                    ON {threads_table}(workspace_id)
             """)
 
             await conn.execute(f"""
@@ -240,11 +262,13 @@ class PostgresPersistence:
         async with self._pool.acquire() as conn:
             await conn.execute(
                 f"""
-                INSERT INTO {table} (id, worker_id, user_id, title, created_at, updated_at, last_event_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                INSERT INTO {table} (id, worker_id, organization_id, workspace_id, user_id, title, created_at, updated_at, last_event_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 """,
                 thread.id,
                 thread.worker_id,
+                thread.organization_id,
+                thread.workspace_id,
                 thread.user_id,
                 thread.title,
                 thread.created_at,
@@ -269,6 +293,8 @@ class PostgresPersistence:
         return Thread(
             id=row["id"],
             worker_id=row["worker_id"],
+            organization_id=row["organization_id"],
+            workspace_id=row["workspace_id"],
             user_id=row["user_id"],
             title=row["title"],
             created_at=row["created_at"],
@@ -285,9 +311,11 @@ class PostgresPersistence:
             await conn.execute(
                 f"""
                 UPDATE {table}
-                SET user_id = $1, title = $2, updated_at = $3, last_event_at = $4
-                WHERE id = $5
+                SET organization_id = $1, workspace_id = $2, user_id = $3, title = $4, updated_at = $5, last_event_at = $6
+                WHERE id = $7
                 """,
+                thread.organization_id,
+                thread.workspace_id,
                 thread.user_id,
                 thread.title,
                 thread.updated_at,
@@ -311,6 +339,8 @@ class PostgresPersistence:
     async def list_threads(
         self,
         worker_id: str,
+        organization_id: str,
+        workspace_id: str,
         user_id: str | None,
         cursor: str | None,
         limit: int,
@@ -319,9 +349,9 @@ class PostgresPersistence:
             raise RuntimeError("Not connected")
 
         table = f"{self._prefix}threads"
-        conditions = ["worker_id = $1"]
-        params: list[Any] = [worker_id]
-        idx = 2
+        conditions = ["worker_id = $1", "organization_id = $2", "workspace_id = $3"]
+        params: list[Any] = [worker_id, organization_id, workspace_id]
+        idx = 4
 
         if user_id:
             conditions.append(f"user_id = ${idx}")
@@ -350,6 +380,8 @@ class PostgresPersistence:
             Thread(
                 id=row["id"],
                 worker_id=row["worker_id"],
+                organization_id=row["organization_id"],
+                workspace_id=row["workspace_id"],
                 user_id=row["user_id"],
                 title=row["title"],
                 created_at=row["created_at"],
