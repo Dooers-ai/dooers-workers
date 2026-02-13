@@ -35,8 +35,8 @@ def add(a: int, b: int) -> int:
 agent = create_react_agent(llm, tools=[multiply, add])
 
 
-async def langgraph_agent(request, response, memory):
-    yield response.run_start(agent_id="langgraph")
+async def langgraph_agent(on, send, memory, analytics, settings):
+    yield send.run_start(agent_id="langgraph")
 
     history = await memory.get_history(limit=20)
 
@@ -50,22 +50,23 @@ async def langgraph_agent(request, response, memory):
                 else:
                     messages.append(AIMessage(content=text))
 
-    messages.append(HumanMessage(content=request.message))
+    messages.append(HumanMessage(content=on.message))
 
     result = await agent.ainvoke({"messages": messages})
 
     for msg in result["messages"]:
         if hasattr(msg, "tool_calls") and msg.tool_calls:
             for tc in msg.tool_calls:
-                yield response.tool_call(tc["name"], tc["args"])
+                yield send.tool_call(tc["name"], tc["args"])
         if msg.type == "tool":
-            yield response.tool_result(msg.name, {"result": msg.content})
+            yield send.tool_result(msg.name, {"result": msg.content})
 
     final = result["messages"][-1]
     if final.content:
-        yield response.text(final.content)
+        yield send.text(final.content)
 
-    yield response.run_end()
+    yield send.update_thread(title=on.message[:60])
+    yield send.run_end()
 
 
 @app.websocket("/ws")

@@ -29,8 +29,8 @@ agent = Agent(
 )
 
 
-async def openai_agents_handler(request, response, memory, analytics, settings):
-    yield response.run_start(agent_id="openai-agents")
+async def openai_agents_handler(on, send, memory, analytics, settings):
+    yield send.run_start(agent_id="openai-agents")
 
     history = await memory.get_history(limit=20)
 
@@ -42,7 +42,7 @@ async def openai_agents_handler(request, response, memory, analytics, settings):
                 role = "user" if event.actor == "user" else "assistant"
                 input_messages.append({"role": role, "content": text})
 
-    input_messages.append({"role": "user", "content": request.message})
+    input_messages.append({"role": "user", "content": on.message})
 
     result = await Runner.run(agent, input=input_messages)
 
@@ -54,7 +54,7 @@ async def openai_agents_handler(request, response, memory, analytics, settings):
             call_id = str(uuid.uuid4())
             args = json.loads(item.raw_item.arguments)
             tool_call_ids[item.raw_item.call_id] = call_id
-            yield response.tool_call(
+            yield send.tool_call(
                 item.raw_item.name,
                 args,
                 display_name=f"Calling {item.raw_item.name}...",
@@ -62,14 +62,15 @@ async def openai_agents_handler(request, response, memory, analytics, settings):
             )
         elif item.type == "tool_call_output_item":
             call_id = tool_call_ids.get(item.raw_item.call_id)
-            yield response.tool_result(
+            yield send.tool_result(
                 item.raw_item.name,
                 {"output": item.output},
                 id=call_id,
             )
 
-    yield response.text(result.final_output)
-    yield response.run_end()
+    yield send.text(result.final_output)
+    yield send.update_thread(title=on.message[:60])
+    yield send.run_end()
 
 
 @app.websocket("/ws")

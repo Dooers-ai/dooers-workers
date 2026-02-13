@@ -1,5 +1,6 @@
 from dooers.broadcast import BroadcastManager
 from dooers.config import WorkerConfig
+from dooers.dispatch import DispatchStream
 from dooers.features.analytics import (
     AnalyticsBatch,
     AnalyticsCollector,
@@ -11,14 +12,16 @@ from dooers.features.analytics import (
 from dooers.features.settings import (
     SettingsBroadcaster,
     SettingsField,
+    SettingsFieldGroup,
     SettingsFieldType,
     SettingsSchema,
     SettingsSelectOption,
     WorkerSettings,
 )
 from dooers.handlers.memory import WorkerMemory
-from dooers.handlers.request import WorkerRequest
-from dooers.handlers.response import WorkerResponse
+from dooers.handlers.on import WorkerOn
+from dooers.handlers.pipeline import Handler
+from dooers.handlers.send import WorkerSend
 from dooers.persistence.base import Persistence
 from dooers.protocol.models import (
     Actor,
@@ -33,18 +36,24 @@ from dooers.protocol.models import (
     ThreadEvent,
 )
 from dooers.registry import ConnectionRegistry
+from dooers.repository import Repository
 from dooers.server import WorkerServer
 
 __all__ = [
     # Core
     "WorkerConfig",
     "WorkerServer",
-    "WorkerResponse",
+    "WorkerSend",
     "WorkerMemory",
-    "WorkerRequest",
+    "WorkerOn",
     "ConnectionRegistry",
     "BroadcastManager",
     "Persistence",
+    # Dispatch
+    "DispatchStream",
+    "Handler",
+    # Repository
+    "Repository",
     # Protocol models
     "ContentPart",
     "TextPart",
@@ -66,6 +75,7 @@ __all__ = [
     # Settings
     "SettingsFieldType",
     "SettingsField",
+    "SettingsFieldGroup",
     "SettingsSelectOption",
     "SettingsSchema",
     "SettingsBroadcaster",

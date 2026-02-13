@@ -14,14 +14,6 @@ logger = logging.getLogger(__name__)
 
 
 class SettingsBroadcaster:
-    """
-    Broadcasts settings changes to subscribed WebSocket connections.
-
-    Supports:
-    - Snapshot delivery on subscription
-    - Patch broadcast when settings are updated
-    """
-
     def __init__(
         self,
         registry: ConnectionRegistry,
@@ -37,14 +29,14 @@ class SettingsBroadcaster:
         schema: SettingsSchema,
         values: dict[str, Any],
     ) -> None:
-        """Send a settings snapshot directly to a specific WebSocket connection."""
         from dooers.protocol.frames import S2C_SettingsSnapshot, SettingsSnapshotPayload
 
-        from .models import SettingsField
+        from .models import SettingsField, _collect_all_fields
 
-        # Merge defaults with stored values
+        public_items = schema.get_public_fields()
+
         fields_with_values: list[SettingsField] = []
-        for field in schema.fields:
+        for field in _collect_all_fields(public_items):
             field_copy = field.model_copy()
             if field.id in values:
                 field_copy.value = values[field.id]
@@ -62,7 +54,7 @@ class SettingsBroadcaster:
         try:
             await ws.send_text(message.model_dump_json())
         except Exception:
-            logger.warning("[dooers-workers] failed to send settings snapshot")
+            logger.warning("[workers] failed to send settings snapshot")
 
     async def broadcast_patch(
         self,
@@ -70,8 +62,14 @@ class SettingsBroadcaster:
         field_id: str,
         value: Any,
         exclude_ws: WebSocketProtocol | None = None,
+        schema: SettingsSchema | None = None,
     ) -> None:
         from dooers.protocol.frames import S2C_SettingsPatch, SettingsPatchBroadcastPayload
+
+        if schema:
+            field = schema.get_field(field_id)
+            if field and field.is_internal:
+                return
 
         subscriber_ws_ids = self._subscriptions.get(worker_id, set())
         if not subscriber_ws_ids:
@@ -88,7 +86,6 @@ class SettingsBroadcaster:
         )
         message_json = message.model_dump_json()
 
-        # Send to all connections for the worker except the one that made the change
         connections = self._registry.get_connections(worker_id)
         for ws in connections:
             if ws is not exclude_ws:

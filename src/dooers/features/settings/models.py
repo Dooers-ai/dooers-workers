@@ -1,12 +1,10 @@
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, model_validator
 
 
 class SettingsFieldType(StrEnum):
-    """Supported field types for worker settings."""
-
     TEXT = "text"
     NUMBER = "number"
     SELECT = "select"
@@ -15,58 +13,86 @@ class SettingsFieldType(StrEnum):
     PASSWORD = "password"
     EMAIL = "email"
     DATE = "date"
-    IMAGE = "image"  # Display-only (QR codes, etc.)
+    IMAGE = "image"
 
 
 class SettingsSelectOption(BaseModel):
-    """Option for select fields."""
-
     value: str
     label: str
 
 
 class SettingsField(BaseModel):
-    """Definition of a single settings field."""
-
     id: str
     type: SettingsFieldType
     label: str
     required: bool = False
     readonly: bool = False
-    value: Any = None  # Default value
+    value: Any = None
+    is_internal: bool = False
 
-    # Type-specific options
     placeholder: str | None = None
-    options: list[SettingsSelectOption] | None = None  # For select
-    min: int | float | None = None  # For number
-    max: int | float | None = None  # For number
-    rows: int | None = None  # For textarea
-    src: str | None = None  # For image (display URL)
-    width: int | None = None  # For image
-    height: int | None = None  # For image
+    options: list[SettingsSelectOption] | None = None
+    min: int | float | None = None
+    max: int | float | None = None
+    rows: int | None = None
+    src: str | None = None
+    width: int | None = None
+    height: int | None = None
+
+
+class SettingsFieldGroup(BaseModel):
+    id: str
+    label: str
+    fields: list[SettingsField]
+    collapsible: Literal["open", "closed"] | None = None
+    is_internal: bool = False
+
+
+def _collect_all_fields(items: list["SettingsField | SettingsFieldGroup"]) -> list[SettingsField]:
+    result: list[SettingsField] = []
+    for item in items:
+        if isinstance(item, SettingsFieldGroup):
+            result.extend(item.fields)
+        else:
+            result.append(item)
+    return result
 
 
 class SettingsSchema(BaseModel):
-    """Schema definition for worker settings."""
-
     version: str = "1.0"
-    fields: list[SettingsField]
+    fields: list[SettingsField | SettingsFieldGroup]
 
     @model_validator(mode="after")
     def validate_unique_ids(self) -> "SettingsSchema":
-        """Ensure all field IDs are unique."""
-        ids = [f.id for f in self.fields]
+        all_fields = _collect_all_fields(self.fields)
+        ids = [f.id for f in all_fields]
         if len(ids) != len(set(ids)):
             raise ValueError("Field IDs must be unique")
         return self
 
     def get_field(self, field_id: str) -> SettingsField | None:
-        """Get a field by its ID."""
-        for field in self.fields:
-            if field.id == field_id:
-                return field
+        for item in self.fields:
+            if isinstance(item, SettingsFieldGroup):
+                for field in item.fields:
+                    if field.id == field_id:
+                        return field
+            elif item.id == field_id:
+                return item
         return None
 
     def get_defaults(self) -> dict[str, Any]:
-        """Get default values for all fields."""
-        return {f.id: f.value for f in self.fields}
+        return {f.id: f.value for f in _collect_all_fields(self.fields)}
+
+    def get_public_fields(self) -> list["SettingsField | SettingsFieldGroup"]:
+        result: list[SettingsField | SettingsFieldGroup] = []
+        for item in self.fields:
+            if isinstance(item, SettingsFieldGroup):
+                if item.is_internal:
+                    continue
+                public_children = [f for f in item.fields if not f.is_internal]
+                if public_children:
+                    group_copy = item.model_copy(update={"fields": public_children})
+                    result.append(group_copy)
+            elif not item.is_internal:
+                result.append(item)
+        return result

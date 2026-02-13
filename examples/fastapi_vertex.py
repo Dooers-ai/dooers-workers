@@ -20,8 +20,8 @@ client = genai.Client(
 )
 
 
-async def vertex_agent(request, response, memory):
-    yield response.run_start(agent_id="vertex-gemini")
+async def vertex_agent(on, send, memory, analytics, settings):
+    yield send.run_start(agent_id="vertex-gemini")
 
     history = await memory.get_history(limit=20)
 
@@ -33,7 +33,7 @@ async def vertex_agent(request, response, memory):
                 role = "user" if event.actor == "user" else "model"
                 contents.append(types.Content(role=role, parts=[types.Part.from_text(text)]))
 
-    contents.append(types.Content(role="user", parts=[types.Part.from_text(request.message)]))
+    contents.append(types.Content(role="user", parts=[types.Part.from_text(on.message)]))
 
     result = await client.aio.models.generate_content(
         model="gemini-2.5-flash",
@@ -43,8 +43,9 @@ async def vertex_agent(request, response, memory):
         ),
     )
 
-    yield response.text(result.text)
-    yield response.run_end()
+    yield send.text(result.text)
+    yield send.update_thread(title=on.message[:60])
+    yield send.run_end()
 
 
 @app.websocket("/ws")

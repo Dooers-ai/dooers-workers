@@ -56,8 +56,8 @@ worker_server = WorkerServer(
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
-async def openai_agent(request, response, memory, analytics, settings):
-    yield response.run_start(agent_id="openai-gpt")
+async def openai_agent(on, send, memory, analytics, settings):
+    yield send.run_start(agent_id="openai-gpt")
 
     # Get settings
     model = await settings.get("model")
@@ -72,7 +72,7 @@ async def openai_agent(request, response, memory, analytics, settings):
 
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(history)
-    messages.append({"role": "user", "content": request.message})
+    messages.append({"role": "user", "content": on.message})
 
     completion = await client.chat.completions.create(
         model=model,
@@ -89,8 +89,9 @@ async def openai_agent(request, response, memory, analytics, settings):
         },
     )
 
-    yield response.text(completion.choices[0].message.content)
-    yield response.run_end()
+    yield send.text(completion.choices[0].message.content)
+    yield send.update_thread(title=on.message[:60])
+    yield send.run_end()
 
 
 @app.websocket("/ws")

@@ -24,18 +24,18 @@ async def search_web(query: str) -> dict:
         return resp.json()
 
 
-async def tool_agent(request, response, memory, analytics, settings):
-    yield response.run_start(agent_id="tool-agent")
+async def tool_agent(on, send, memory, analytics, settings):
+    yield send.run_start(agent_id="tool-agent")
 
-    if request.message.lower().startswith("search "):
-        query = request.message[7:]
+    if on.message.lower().startswith("search "):
+        query = on.message[7:]
         args = {"query": query}
 
         # Generate correlation ID for tool call/result pairing
         call_id = str(uuid.uuid4())
 
         # Emit tool call with display_name for frontend rendering
-        yield response.tool_call(
+        yield send.tool_call(
             "web_search",
             args,
             display_name="Searching the web...",
@@ -45,7 +45,7 @@ async def tool_agent(request, response, memory, analytics, settings):
         results = await search_web(query)
 
         # Emit tool result with same ID for correlation
-        yield response.tool_result(
+        yield send.tool_result(
             "web_search",
             {"results": results},
             args=args,  # Echo args for self-contained rendering
@@ -53,13 +53,14 @@ async def tool_agent(request, response, memory, analytics, settings):
         )
 
         if results.get("Abstract"):
-            yield response.text(results["Abstract"])
+            yield send.text(results["Abstract"])
         else:
-            yield response.text(f"No results found for: {query}")
+            yield send.text(f"No results found for: {query}")
     else:
-        yield response.text("Try: search <query>")
+        yield send.text("Try: search <query>")
 
-    yield response.run_end()
+    yield send.update_thread(title=on.message[:60])
+    yield send.run_end()
 
 
 @app.websocket("/ws")

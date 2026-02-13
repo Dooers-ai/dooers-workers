@@ -19,8 +19,8 @@ llm = ChatOpenAI(
 )
 
 
-async def langchain_agent(request, response, memory):
-    yield response.run_start(agent_id="langchain")
+async def langchain_agent(on, send, memory, analytics, settings):
+    yield send.run_start(agent_id="langchain")
 
     history = await memory.get_history(limit=20)
 
@@ -34,12 +34,13 @@ async def langchain_agent(request, response, memory):
                 else:
                     messages.append(AIMessage(content=text))
 
-    messages.append(HumanMessage(content=request.message))
+    messages.append(HumanMessage(content=on.message))
 
     result = await llm.ainvoke(messages)
 
-    yield response.text(result.content)
-    yield response.run_end()
+    yield send.text(result.content)
+    yield send.update_thread(title=on.message[:60])
+    yield send.run_end()
 
 
 @app.websocket("/ws")

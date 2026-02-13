@@ -13,7 +13,6 @@ def _parse_ssl(value: str) -> bool | str:
         return False
     if lower in ("true", "1", "yes", "on"):
         return True
-    # PostgreSQL SSL modes: disable, allow, prefer, require, verify-ca, verify-full
     if lower in ("disable", "allow", "prefer", "require", "verify-ca", "verify-full"):
         return lower
     return False
@@ -23,32 +22,24 @@ def _parse_ssl(value: str) -> bool | str:
 class WorkerConfig:
     database_type: Literal["postgres", "sqlite", "cosmos"]
 
-    # Display name for assistant responses
     assistant_name: str = "Assistant"
 
-    # Database connection fields (defaults from WORKER_DATABASE_* env vars)
-    # For postgres: host, port, user, name, password, ssl
-    # For sqlite: name (file path)
-    # For cosmos: host (endpoint), name (database), key
     database_host: str = field(default_factory=lambda: os.environ.get("WORKER_DATABASE_HOST", "localhost"))
     database_port: int = field(default_factory=lambda: int(os.environ.get("WORKER_DATABASE_PORT", "5432")))
     database_user: str = field(default_factory=lambda: os.environ.get("WORKER_DATABASE_USER", "postgres"))
     database_name: str = field(default_factory=lambda: os.environ.get("WORKER_DATABASE_NAME", ""))
     database_password: str = field(default_factory=lambda: os.environ.get("WORKER_DATABASE_PASSWORD", ""))
-    database_key: str = field(default_factory=lambda: os.environ.get("WORKER_DATABASE_KEY", ""))  # For cosmos auth
+    database_key: str = field(default_factory=lambda: os.environ.get("WORKER_DATABASE_KEY", ""))
     database_ssl: bool | str = field(default_factory=lambda: _parse_ssl(os.environ.get("WORKER_DATABASE_SSL", "false")))
 
     database_table_prefix: str = "worker_"
     database_auto_migrate: bool = True
 
-    # Thread privacy - when True, users only see their own threads
     private_threads: bool = False
 
-    # Analytics (optional, defaults from settings.py)
     analytics_enabled: bool = True
-    analytics_webhook_url: str | None = None  # Override default webhook URL
-    analytics_batch_size: int | None = None  # Override default
-    analytics_flush_interval: float | None = None  # Override default
+    analytics_webhook_url: str | None = None
+    analytics_batch_size: int | None = None
+    analytics_flush_interval: float | None = None
 
-    # Settings
     settings_schema: "SettingsSchema | None" = None

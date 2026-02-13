@@ -12,13 +12,14 @@ worker_server = WorkerServer(
 )
 
 
-async def echo_agent(request, response, memory, analytics, settings):
-    yield response.run_start(agent_id="echo")
+async def echo_agent(on, send, memory, analytics, settings):
+    yield send.run_start(agent_id="echo")
     # Uses default assistant_name ("Echo Bot") as author
-    yield response.text(f"You said: {request.message}")
+    yield send.text(f"You said: {on.message}")
     # Or override author for specific messages:
-    # yield response.text("System notice", author="System")
-    yield response.run_end()
+    # yield send.text("System notice", author="System")
+    yield send.update_thread(title=on.message[:60])
+    yield send.run_end()
 
 
 @app.websocket("/ws")

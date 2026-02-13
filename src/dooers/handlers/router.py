@@ -2,16 +2,10 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import AsyncGenerator, Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol
 
-from dooers.features.analytics.models import AnalyticsEvent
-from dooers.features.analytics.worker_analytics import WorkerAnalytics
-from dooers.features.settings.worker_settings import WorkerSettings
-from dooers.handlers.memory import WorkerMemory
-from dooers.handlers.request import WorkerRequest
-from dooers.handlers.response import WorkerEvent, WorkerResponse
+from dooers.handlers.pipeline import Handler, HandlerContext, HandlerPipeline
 from dooers.persistence.base import Persistence
 from dooers.protocol.frames import (
     AckPayload,
@@ -45,7 +39,6 @@ from dooers.protocol.frames import (
     ThreadSnapshotPayload,
     ThreadUpsertPayload,
 )
-from dooers.protocol.models import DocumentPart, ImagePart, Run, TextPart, Thread, ThreadEvent
 from dooers.protocol.parser import serialize_frame
 from dooers.registry import ConnectionRegistry
 
@@ -54,19 +47,13 @@ if TYPE_CHECKING:
     from dooers.features.settings.broadcaster import SettingsBroadcaster
     from dooers.features.settings.models import SettingsSchema
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("workers")
 
 
 class WebSocketProtocol(Protocol):
     async def receive_text(self) -> str: ...
     async def send_text(self, data: str) -> None: ...
     async def close(self, code: int = 1000) -> None: ...
-
-
-Handler = Callable[
-    [WorkerRequest, WorkerResponse, WorkerMemory, WorkerAnalytics, WorkerSettings],
-    AsyncGenerator[WorkerEvent, None],
-]
 
 
 def _generate_id() -> str:
@@ -95,9 +82,8 @@ class Router:
         self._persistence = persistence
         self._handler = handler
         self._registry = registry
-        self._subscriptions = subscriptions  # ws_id -> set of subscribed thread_ids
+        self._subscriptions = subscriptions
 
-        # Analytics and settings
         self._analytics_collector = analytics_collector
         self._settings_broadcaster = settings_broadcaster
         self._settings_schema = settings_schema
@@ -106,9 +92,8 @@ class Router:
         self._analytics_subscriptions = analytics_subscriptions if analytics_subscriptions is not None else {}
         self._settings_subscriptions = settings_subscriptions if settings_subscriptions is not None else {}
 
-        # Connection state
         self._ws: WebSocketProtocol | None = None
-        self._ws_id: str = _generate_id()  # Unique ID for this connection
+        self._ws_id: str = _generate_id()
         self._worker_id: str | None = None
         self._organization_id: str | None = None
         self._workspace_id: str | None = None
@@ -117,6 +102,15 @@ class Router:
         self._user_email: str | None = None
         self._user_role: str | None = None
         self._subscribed_threads: set[str] = set()
+
+        self._pipeline = HandlerPipeline(
+            persistence=persistence,
+            broadcast_callback=self._broadcast_to_worker_dict,
+            analytics_collector=analytics_collector,
+            settings_broadcaster=settings_broadcaster,
+            settings_schema=settings_schema,
+            assistant_name=assistant_name,
+        )
 
     async def _send(self, ws: WebSocketProtocol, frame: ServerToClient) -> None:
         await ws.send_text(serialize_frame(frame))
@@ -148,6 +142,34 @@ class Router:
         message = serialize_frame(frame)
         await self._registry.broadcast_except(self._worker_id, ws, message)
 
+    async def _broadcast_to_worker_dict(self, worker_id: str, payload: dict) -> None:
+        """Convert a dict payload from the pipeline into S2C frames and broadcast."""
+        payload_type = payload.get("type")
+
+        if payload_type == "thread.upsert":
+            frame = S2C_ThreadUpsert(
+                id=_generate_id(),
+                payload=ThreadUpsertPayload(thread=payload["thread"]),
+            )
+        elif payload_type == "event.append":
+            frame = S2C_EventAppend(
+                id=_generate_id(),
+                payload=EventAppendPayload(
+                    thread_id=payload["thread_id"],
+                    events=payload["events"],
+                ),
+            )
+        elif payload_type == "run.upsert":
+            frame = S2C_RunUpsert(
+                id=_generate_id(),
+                payload=RunUpsertPayload(run=payload["run"]),
+            )
+        else:
+            return
+
+        message = serialize_frame(frame)
+        await self._registry.broadcast(worker_id, message)
+
     async def route(self, ws: WebSocketProtocol, frame: ClientToServer) -> None:
         self._ws = ws
         match frame:
@@ -163,14 +185,14 @@ class Router:
                 await self._handle_thread_delete(ws, frame)
             case C2S_EventCreate():
                 await self._handle_event_create(ws, frame)
-            # Analytics frames
+
             case C2S_AnalyticsSubscribe():
                 await self._handle_analytics_subscribe(ws, frame)
             case C2S_AnalyticsUnsubscribe():
                 await self._handle_analytics_unsubscribe(ws, frame)
             case C2S_Feedback():
                 await self._handle_feedback(ws, frame)
-            # Settings frames
+
             case C2S_SettingsSubscribe():
                 await self._handle_settings_subscribe(ws, frame)
             case C2S_SettingsUnsubscribe():
@@ -180,7 +202,7 @@ class Router:
 
     async def cleanup(self) -> None:
         logger.info(
-            "[dooers-workers] router cleanup: ws=%s, worker=%s, had_analytics_sub=%s",
+            "[workers] router cleanup: ws=%s, worker=%s, had_analytics_sub=%s",
             self._ws_id,
             self._worker_id,
             self._ws_id in self._analytics_subscriptions.get(self._worker_id or "", set()),
@@ -188,25 +210,21 @@ class Router:
         if self._worker_id:
             await self._registry.unregister(self._worker_id, self._ws)
 
-            # Clean up analytics subscriptions
             if self._worker_id in self._analytics_subscriptions:
                 self._analytics_subscriptions[self._worker_id].discard(self._ws_id)
                 if not self._analytics_subscriptions[self._worker_id]:
-                    logger.info("[dooers-workers] analytics subscriptions emptied for worker %s — deleting key", self._worker_id)
+                    logger.info("[workers] analytics subscriptions emptied for worker %s — deleting key", self._worker_id)
                     del self._analytics_subscriptions[self._worker_id]
 
-            # Clean up settings subscriptions
             if self._worker_id in self._settings_subscriptions:
                 self._settings_subscriptions[self._worker_id].discard(self._ws_id)
                 if not self._settings_subscriptions[self._worker_id]:
                     del self._settings_subscriptions[self._worker_id]
 
-        # Clean up thread subscriptions tracking
         if self._ws_id in self._subscriptions:
             del self._subscriptions[self._ws_id]
 
     async def _handle_connect(self, ws: WebSocketProtocol, frame: C2S_Connect) -> None:
-        # Extract identity from payload
         self._worker_id = frame.payload.worker_id
         self._organization_id = frame.payload.organization_id
         self._workspace_id = frame.payload.workspace_id
@@ -216,10 +234,8 @@ class Router:
         self._user_role = frame.payload.user_role
         self._ws = ws
 
-        # Register connection in registry
         await self._registry.register(self._worker_id, ws)
 
-        # Initialize subscriptions for this connection
         self._subscriptions[self._ws_id] = set()
 
         await self._send_ack(ws, frame.id)
@@ -234,8 +250,6 @@ class Router:
             )
             return
 
-        # Filter by worker_id, organization_id, workspace_id
-        # Optionally filter by user_id if private_threads is enabled
         threads = await self._persistence.list_threads(
             worker_id=self._worker_id,
             organization_id=self._organization_id or "",
@@ -276,7 +290,6 @@ class Router:
             )
             return
 
-        # Verify thread belongs to this worker
         if thread.worker_id != self._worker_id:
             await self._send_ack(
                 ws,
@@ -345,12 +358,10 @@ class Router:
 
         await self._persistence.delete_thread(thread_id)
 
-        # Remove from subscriptions
         self._subscribed_threads.discard(thread_id)
         if self._ws_id in self._subscriptions:
             self._subscriptions[self._ws_id].discard(thread_id)
 
-        # Broadcast deletion to all worker connections
         deleted_frame = S2C_ThreadDeleted(
             id=_generate_id(),
             payload=ThreadDeletedPayload(thread_id=thread_id),
@@ -369,423 +380,50 @@ class Router:
             )
             return
 
-        now = _now()
-        thread_id = frame.payload.thread_id
+        content_parts = list(frame.payload.event.content)
 
-        if not thread_id:
-            # Create new thread for this worker
-            thread_id = _generate_id()
-            thread = Thread(
-                id=thread_id,
-                worker_id=self._worker_id,
-                organization_id=self._organization_id or "",
-                workspace_id=self._workspace_id or "",
-                user_id=self._user_id or "",
-                title=None,
-                created_at=now,
-                updated_at=now,
-                last_event_at=now,
-            )
-            await self._persistence.create_thread(thread)
-            self._subscribed_threads.add(thread_id)
-            self._subscriptions[self._ws_id].add(thread_id)
-
-            # Broadcast new thread to ALL worker connections
-            thread_upsert = S2C_ThreadUpsert(
-                id=_generate_id(),
-                payload=ThreadUpsertPayload(thread=thread),
-            )
-            await self._broadcast_to_worker(thread_upsert)
-
-            # Track thread.created
-            await self._track_event(
-                AnalyticsEvent.THREAD_CREATED.value,
-                thread_id=thread_id,
-            )
-        else:
-            # Verify thread belongs to this worker
-            thread = await self._persistence.get_thread(thread_id)
-            if not thread:
-                await self._send_ack(
-                    ws,
-                    frame.id,
-                    ok=False,
-                    error={"code": "NOT_FOUND", "message": "Thread not found"},
-                )
-                return
-            if thread.worker_id != self._worker_id:
-                await self._send_ack(
-                    ws,
-                    frame.id,
-                    ok=False,
-                    error={"code": "FORBIDDEN", "message": "Thread belongs to different worker"},
-                )
-                return
-
-        # Create user event with identity
-        user_event_id = _generate_id()
-        content_parts = [self._convert_content_part(part) for part in frame.payload.event.content]
-        user_event = ThreadEvent(
-            id=user_event_id,
-            thread_id=thread_id,
-            run_id=None,
-            type="message",
-            actor="user",
-            user_id=self._user_id,
+        context = HandlerContext(
+            handler=self._handler,
+            worker_id=self._worker_id,
+            organization_id=self._organization_id or "",
+            workspace_id=self._workspace_id or "",
+            message="",
+            user_id=self._user_id or "",
             user_name=self._user_name,
             user_email=self._user_email,
+            user_role=self._user_role,
+            thread_id=frame.payload.thread_id,
             content=content_parts,
             data=frame.payload.event.data,
-            created_at=now,
         )
-        await self._persistence.create_event(user_event)
 
-        # Broadcast user event to ALL worker connections
-        event_append = S2C_EventAppend(
-            id=_generate_id(),
-            payload=EventAppendPayload(thread_id=thread_id, events=[user_event]),
-        )
-        await self._broadcast_to_worker(event_append)
+        try:
+            result = await self._pipeline.setup(context)
+        except ValueError:
+            await self._send_ack(
+                ws,
+                frame.id,
+                ok=False,
+                error={"code": "NOT_FOUND", "message": "Thread not found"},
+            )
+            return
+        except PermissionError:
+            await self._send_ack(
+                ws,
+                frame.id,
+                ok=False,
+                error={"code": "FORBIDDEN", "message": "Thread belongs to different worker"},
+            )
+            return
 
-        # Track message.c2s
-        await self._track_event(
-            AnalyticsEvent.MESSAGE_C2S.value,
-            thread_id=thread_id,
-            event_id=user_event_id,
-        )
+        if result.is_new_thread:
+            self._subscribed_threads.add(result.thread.id)
+            self._subscriptions[self._ws_id].add(result.thread.id)
 
         await self._send_ack(ws, frame.id)
 
-        # Process with handler
-        message = self._extract_message(content_parts)
-        request = WorkerRequest(
-            message=message,
-            content=content_parts,
-            thread_id=thread_id,
-            event_id=user_event_id,
-            organization_id=self._organization_id or "",
-            workspace_id=self._workspace_id or "",
-            user_id=self._user_id or "",
-            user_name=self._user_name or "",
-            user_email=self._user_email or "",
-            user_role=self._user_role or "",
-            thread_title=thread.title if thread else None,
-            thread_created_at=thread.created_at if thread else None,
-        )
-        response = WorkerResponse()
-        memory = WorkerMemory(thread_id=thread_id, persistence=self._persistence)
-
-        # Create analytics instance for handler
-        analytics = (
-            WorkerAnalytics(
-                worker_id=self._worker_id,
-                thread_id=thread_id,
-                user_id=self._user_id,
-                run_id=None,  # Will be set when run starts
-                collector=self._analytics_collector,
-            )
-            if self._analytics_collector
-            else self._create_noop_analytics()
-        )
-
-        # Create settings instance for handler
-        settings = (
-            WorkerSettings(
-                worker_id=self._worker_id,
-                schema=self._settings_schema,
-                persistence=self._persistence,
-                broadcaster=self._settings_broadcaster,
-            )
-            if self._settings_schema and self._settings_broadcaster
-            else self._create_noop_settings()
-        )
-
-        current_run_id: str | None = None
-
-        try:
-            async for event in self._handler(request, response, memory, analytics, settings):
-                event_now = _now()
-
-                if event.response_type == "run_start":
-                    current_run_id = _generate_id()
-                    run = Run(
-                        id=current_run_id,
-                        thread_id=thread_id,
-                        agent_id=event.data.get("agent_id"),
-                        status="running",
-                        started_at=event_now,
-                    )
-                    await self._persistence.create_run(run)
-
-                    run_upsert = S2C_RunUpsert(
-                        id=_generate_id(),
-                        payload=RunUpsertPayload(run=run),
-                    )
-                    await self._broadcast_to_worker(run_upsert)
-
-                elif event.response_type == "run_end":
-                    if current_run_id:
-                        run = Run(
-                            id=current_run_id,
-                            thread_id=thread_id,
-                            status=event.data.get("status", "succeeded"),
-                            started_at=event_now,
-                            ended_at=event_now,
-                            error=event.data.get("error"),
-                        )
-                        await self._persistence.update_run(run)
-
-                        run_upsert = S2C_RunUpsert(
-                            id=_generate_id(),
-                            payload=RunUpsertPayload(run=run),
-                        )
-                        await self._broadcast_to_worker(run_upsert)
-                        current_run_id = None
-
-                elif event.response_type == "text":
-                    event_id = _generate_id()
-                    thread_event = ThreadEvent(
-                        id=event_id,
-                        thread_id=thread_id,
-                        run_id=current_run_id,
-                        type="message",
-                        actor="assistant",
-                        author=event.data.get("author") or self._assistant_name,
-                        user_id=None,
-                        user_name=None,
-                        user_email=None,
-                        content=[TextPart(text=event.data["text"])],
-                        created_at=event_now,
-                    )
-                    await self._persistence.create_event(thread_event)
-
-                    append = S2C_EventAppend(
-                        id=_generate_id(),
-                        payload=EventAppendPayload(thread_id=thread_id, events=[thread_event]),
-                    )
-                    await self._broadcast_to_worker(append)
-
-                    # Track message.s2c
-                    await self._track_event(
-                        AnalyticsEvent.MESSAGE_S2C.value,
-                        thread_id=thread_id,
-                        run_id=current_run_id,
-                        event_id=event_id,
-                        data={"type": "text"},
-                    )
-
-                elif event.response_type == "image":
-                    event_id = _generate_id()
-                    thread_event = ThreadEvent(
-                        id=event_id,
-                        thread_id=thread_id,
-                        run_id=current_run_id,
-                        type="message",
-                        actor="assistant",
-                        author=event.data.get("author") or self._assistant_name,
-                        user_id=None,
-                        user_name=None,
-                        user_email=None,
-                        content=[
-                            ImagePart(
-                                url=event.data["url"],
-                                mime_type=event.data.get("mime_type"),
-                                alt=event.data.get("alt"),
-                            )
-                        ],
-                        created_at=event_now,
-                    )
-                    await self._persistence.create_event(thread_event)
-
-                    append = S2C_EventAppend(
-                        id=_generate_id(),
-                        payload=EventAppendPayload(thread_id=thread_id, events=[thread_event]),
-                    )
-                    await self._broadcast_to_worker(append)
-
-                    # Track message.s2c
-                    await self._track_event(
-                        AnalyticsEvent.MESSAGE_S2C.value,
-                        thread_id=thread_id,
-                        run_id=current_run_id,
-                        event_id=event_id,
-                        data={"type": "image"},
-                    )
-
-                elif event.response_type == "document":
-                    event_id = _generate_id()
-                    thread_event = ThreadEvent(
-                        id=event_id,
-                        thread_id=thread_id,
-                        run_id=current_run_id,
-                        type="message",
-                        actor="assistant",
-                        author=event.data.get("author") or self._assistant_name,
-                        user_id=None,
-                        user_name=None,
-                        user_email=None,
-                        content=[
-                            DocumentPart(
-                                url=event.data["url"],
-                                filename=event.data["filename"],
-                                mime_type=event.data["mime_type"],
-                            )
-                        ],
-                        created_at=event_now,
-                    )
-                    await self._persistence.create_event(thread_event)
-
-                    append = S2C_EventAppend(
-                        id=_generate_id(),
-                        payload=EventAppendPayload(thread_id=thread_id, events=[thread_event]),
-                    )
-                    await self._broadcast_to_worker(append)
-
-                    # Track message.s2c
-                    await self._track_event(
-                        AnalyticsEvent.MESSAGE_S2C.value,
-                        thread_id=thread_id,
-                        run_id=current_run_id,
-                        event_id=event_id,
-                        data={"type": "document"},
-                    )
-
-                elif event.response_type == "tool_call":
-                    event_id = _generate_id()
-                    thread_event = ThreadEvent(
-                        id=event_id,
-                        thread_id=thread_id,
-                        run_id=current_run_id,
-                        type="tool.call",
-                        actor="assistant",
-                        user_id=None,
-                        user_name=None,
-                        user_email=None,
-                        data={
-                            "id": event.data["id"],
-                            "name": event.data["name"],
-                            "display_name": event.data.get("display_name"),
-                            "args": event.data["args"],
-                        },
-                        created_at=event_now,
-                    )
-                    await self._persistence.create_event(thread_event)
-
-                    append = S2C_EventAppend(
-                        id=_generate_id(),
-                        payload=EventAppendPayload(thread_id=thread_id, events=[thread_event]),
-                    )
-                    await self._broadcast_to_worker(append)
-
-                    # Track tool.called
-                    await self._track_event(
-                        AnalyticsEvent.TOOL_CALLED.value,
-                        thread_id=thread_id,
-                        run_id=current_run_id,
-                        event_id=event_id,
-                        data={"name": event.data["name"]},
-                    )
-
-                elif event.response_type == "tool_result":
-                    thread_event = ThreadEvent(
-                        id=_generate_id(),
-                        thread_id=thread_id,
-                        run_id=current_run_id,
-                        type="tool.result",
-                        actor="tool",
-                        user_id=None,
-                        user_name=None,
-                        user_email=None,
-                        data={
-                            "id": event.data.get("id"),
-                            "name": event.data["name"],
-                            "display_name": event.data.get("display_name"),
-                            "args": event.data.get("args"),
-                            "result": event.data["result"],
-                        },
-                        created_at=event_now,
-                    )
-                    await self._persistence.create_event(thread_event)
-
-                    append = S2C_EventAppend(
-                        id=_generate_id(),
-                        payload=EventAppendPayload(thread_id=thread_id, events=[thread_event]),
-                    )
-                    await self._broadcast_to_worker(append)
-
-                elif event.response_type == "thread_update":
-                    thread = await self._persistence.get_thread(thread_id)
-                    if thread:
-                        if event.data.get("title") is not None:
-                            thread.title = event.data["title"]
-                        thread.updated_at = event_now
-                        await self._persistence.update_thread(thread)
-                        thread_upsert = S2C_ThreadUpsert(
-                            id=_generate_id(),
-                            payload=ThreadUpsertPayload(thread=thread),
-                        )
-                        await self._broadcast_to_worker(thread_upsert)
-
-                if event.response_type != "thread_update":
-                    await self._update_thread_last_event(thread_id, event_now)
-
-        except Exception as e:
-            # Track error.occurred
-            await self._track_event(
-                AnalyticsEvent.ERROR_OCCURRED.value,
-                thread_id=thread_id,
-                run_id=current_run_id,
-                data={"error": str(e), "type": type(e).__name__},
-            )
-
-            if current_run_id:
-                error_now = _now()
-                run = Run(
-                    id=current_run_id,
-                    thread_id=thread_id,
-                    status="failed",
-                    started_at=error_now,
-                    ended_at=error_now,
-                    error=str(e),
-                )
-                await self._persistence.update_run(run)
-
-                run_upsert = S2C_RunUpsert(
-                    id=_generate_id(),
-                    payload=RunUpsertPayload(run=run),
-                )
-                await self._broadcast_to_worker(run_upsert)
-
-    async def _update_thread_last_event(self, thread_id: str, timestamp: datetime) -> None:
-        thread = await self._persistence.get_thread(thread_id)
-        if thread:
-            thread.last_event_at = timestamp
-            thread.updated_at = timestamp
-            await self._persistence.update_thread(thread)
-
-    def _convert_content_part(self, part):
-        if hasattr(part, "model_dump"):
-            data = part.model_dump()
-        else:
-            data = dict(part) if hasattr(part, "__iter__") else part
-
-        part_type = data.get("type")
-        if part_type == "text":
-            return TextPart(**data)
-        elif part_type == "image":
-            return ImagePart(**data)
-        elif part_type == "document":
-            return DocumentPart(**data)
-        return part
-
-    def _extract_message(self, content: list) -> str:
-        texts = []
-        for part in content:
-            if isinstance(part, TextPart):
-                texts.append(part.text)
-        return " ".join(texts)
-
-    # Analytics frame handlers
+        async for _event in self._pipeline.execute(context, result):
+            pass
 
     async def _handle_analytics_subscribe(
         self,
@@ -811,13 +449,12 @@ class Router:
             )
             return
 
-        # Add to analytics subscriptions
         if worker_id not in self._analytics_subscriptions:
             self._analytics_subscriptions[worker_id] = set()
         self._analytics_subscriptions[worker_id].add(self._ws_id)
 
         logger.info(
-            "[dooers-workers] analytics subscribed: ws=%s, worker=%s, total_subscribers=%d",
+            "[workers] analytics subscribed: ws=%s, worker=%s, total_subscribers=%d",
             self._ws_id,
             worker_id,
             len(self._analytics_subscriptions[worker_id]),
@@ -832,7 +469,7 @@ class Router:
     ) -> None:
         worker_id = frame.payload.worker_id
         logger.info(
-            "[dooers-workers] analytics unsubscribed: ws=%s, worker=%s",
+            "[workers] analytics unsubscribed: ws=%s, worker=%s",
             self._ws_id,
             worker_id,
         )
@@ -867,7 +504,6 @@ class Router:
                 reason=frame.payload.reason,
             )
 
-        # Send feedback acknowledgment
         ack = S2C_FeedbackAck(
             id=_generate_id(),
             payload=FeedbackAckPayload(
@@ -878,8 +514,6 @@ class Router:
             ),
         )
         await self._send(ws, ack)
-
-    # Settings frame handlers
 
     async def _handle_settings_subscribe(
         self,
@@ -914,12 +548,10 @@ class Router:
             )
             return
 
-        # Add to settings subscriptions
         if worker_id not in self._settings_subscriptions:
             self._settings_subscriptions[worker_id] = set()
         self._settings_subscriptions[worker_id].add(self._ws_id)
 
-        # Send settings snapshot directly to this connection
         if self._settings_broadcaster:
             values = await self._persistence.get_settings(worker_id)
             await self._settings_broadcaster.broadcast_snapshot_to_ws(
@@ -970,7 +602,6 @@ class Router:
         field_id = frame.payload.field_id
         value = frame.payload.value
 
-        # Validate field exists and is not readonly
         field = self._settings_schema.get_field(field_id)
         if not field:
             await self._send_ack(
@@ -990,10 +621,17 @@ class Router:
             )
             return
 
-        # Update setting
+        if field.is_internal:
+            await self._send_ack(
+                ws,
+                frame.id,
+                ok=False,
+                error={"code": "INTERNAL", "message": f"Field '{field_id}' is internal"},
+            )
+            return
+
         await self._persistence.update_setting(self._worker_id, field_id, value)
 
-        # Broadcast to other subscribers (exclude sender)
         if self._settings_broadcaster:
             await self._settings_broadcaster.broadcast_patch(
                 worker_id=self._worker_id,
@@ -1003,8 +641,6 @@ class Router:
             )
 
         await self._send_ack(ws, frame.id)
-
-    # Analytics tracking helpers
 
     async def _track_event(
         self,
@@ -1025,50 +661,3 @@ class Router:
                 event_id=event_id,
                 data=data,
             )
-
-    def _create_noop_analytics(self) -> WorkerAnalytics:
-        """Create a no-op analytics instance when collector is disabled."""
-
-        # Create a minimal collector that does nothing
-        class NoopCollector:
-            async def track(self, **kwargs) -> None:
-                pass
-
-            async def feedback(self, **kwargs) -> None:
-                pass
-
-        return WorkerAnalytics(
-            worker_id=self._worker_id or "",
-            thread_id="",
-            user_id=None,
-            run_id=None,
-            collector=NoopCollector(),  # type: ignore
-        )
-
-    def _create_noop_settings(self) -> WorkerSettings:
-        """Create a no-op settings instance when settings are not configured."""
-        from dooers.features.settings.models import SettingsSchema
-
-        class NoopBroadcaster:
-            async def broadcast_snapshot(self, **kwargs) -> None:
-                pass
-
-            async def broadcast_patch(self, **kwargs) -> None:
-                pass
-
-        class NoopPersistence:
-            async def get_settings(self, worker_id: str) -> dict:
-                return {}
-
-            async def update_setting(self, worker_id: str, field_id: str, value) -> None:
-                pass
-
-            async def set_settings(self, worker_id: str, values: dict) -> None:
-                pass
-
-        return WorkerSettings(
-            worker_id=self._worker_id or "",
-            schema=SettingsSchema(fields=[]),
-            persistence=NoopPersistence(),  # type: ignore
-            broadcaster=NoopBroadcaster(),  # type: ignore
-        )

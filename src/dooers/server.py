@@ -1,15 +1,32 @@
+from __future__ import annotations
+
 import logging
+import uuid
 
 from dooers.broadcast import BroadcastManager
 from dooers.config import WorkerConfig
+from dooers.dispatch import DispatchStream
 from dooers.features.analytics.collector import AnalyticsCollector
+from dooers.features.analytics.worker_analytics import WorkerAnalytics
 from dooers.features.settings.broadcaster import SettingsBroadcaster
+from dooers.features.settings.worker_settings import WorkerSettings
+from dooers.handlers.memory import WorkerMemory
+from dooers.handlers.pipeline import HandlerContext, HandlerPipeline
 from dooers.handlers.router import Handler, Router, WebSocketProtocol
 from dooers.persistence.base import Persistence
 from dooers.persistence.postgres import PostgresPersistence
 from dooers.persistence.sqlite import SqlitePersistence
-from dooers.protocol.parser import parse_frame
+from dooers.protocol.frames import (
+    EventAppendPayload,
+    RunUpsertPayload,
+    S2C_EventAppend,
+    S2C_RunUpsert,
+    S2C_ThreadUpsert,
+    ThreadUpsertPayload,
+)
+from dooers.protocol.parser import parse_frame, serialize_frame
 from dooers.registry import ConnectionRegistry
+from dooers.repository import Repository
 from dooers.settings import (
     ANALYTICS_BATCH_SIZE,
     ANALYTICS_FLUSH_INTERVAL,
@@ -25,21 +42,15 @@ class WorkerServer:
         self._persistence: Persistence | None = None
         self._initialized = False
 
-        # Shared state across all connections
         self._registry = ConnectionRegistry()
         self._subscriptions: dict[str, set[str]] = {}  # ws_id -> set of thread_ids
 
-        # Analytics and settings subscriptions
         self._analytics_subscriptions: dict[str, set[str]] = {}  # worker_id -> set of ws_ids
         self._settings_subscriptions: dict[str, set[str]] = {}  # worker_id -> set of ws_ids
 
-        # Broadcast manager (initialized after persistence)
         self._broadcast: BroadcastManager | None = None
 
-        # Analytics collector (initialized after persistence)
         self._analytics_collector: AnalyticsCollector | None = None
-
-        # Settings broadcaster (initialized after persistence)
         self._settings_broadcaster: SettingsBroadcaster | None = None
 
     @property
@@ -92,14 +103,12 @@ class WorkerServer:
         if self._config.database_auto_migrate:
             await self._persistence.migrate()
 
-        # Initialize broadcast manager
         self._broadcast = BroadcastManager(
             registry=self._registry,
             persistence=self._persistence,
             subscriptions=self._subscriptions,
         )
 
-        # Initialize analytics collector if enabled
         if self._config.analytics_enabled:
             batch_size = self._config.analytics_batch_size or ANALYTICS_BATCH_SIZE
             flush_interval = self._config.analytics_flush_interval or ANALYTICS_FLUSH_INTERVAL
@@ -114,7 +123,6 @@ class WorkerServer:
             )
             await self._analytics_collector.start()
 
-        # Initialize settings broadcaster
         self._settings_broadcaster = SettingsBroadcaster(
             registry=self._registry,
             subscriptions=self._settings_subscriptions,
@@ -152,21 +160,166 @@ class WorkerServer:
                 frame = parse_frame(data)
                 await router.route(websocket, frame)
         except Exception as e:
-            # Log unexpected errors (connection closed errors are expected)
             error_name = type(e).__name__
             if error_name not in ("WebSocketDisconnect", "ConnectionClosedOK", "ConnectionClosedError"):
-                logger.debug("[dooers-workers] websocket connection error: %s: %s", error_name, e)
+                logger.debug("[workers] websocket connection error: %s: %s", error_name, e)
         finally:
-            # Clean up connection resources
             await router.cleanup()
 
+    async def dispatch(
+        self,
+        handler: Handler,
+        worker_id: str,
+        organization_id: str,
+        workspace_id: str,
+        message: str,
+        user_id: str,
+        user_name: str | None = None,
+        user_email: str | None = None,
+        user_role: str | None = None,
+        thread_id: str | None = None,
+        thread_title: str | None = None,
+        content: list | None = None,
+    ) -> DispatchStream:
+        persistence = await self._ensure_initialized()
+
+        pipeline = HandlerPipeline(
+            persistence=persistence,
+            broadcast_callback=self._broadcast_dict_to_worker,
+            analytics_collector=self._analytics_collector,
+            settings_broadcaster=self._settings_broadcaster,
+            settings_schema=self._config.settings_schema,
+            assistant_name=self._config.assistant_name,
+        )
+
+        context = HandlerContext(
+            handler=handler,
+            worker_id=worker_id,
+            organization_id=organization_id,
+            workspace_id=workspace_id,
+            message=message,
+            user_id=user_id,
+            user_name=user_name,
+            user_email=user_email,
+            user_role=user_role,
+            thread_id=thread_id,
+            thread_title=thread_title,
+            content=content,
+        )
+
+        result = await pipeline.setup(context)
+
+        return DispatchStream(pipeline=pipeline, context=context, result=result)
+
+    async def repository(self) -> Repository:
+        persistence = await self._ensure_initialized()
+        return Repository(persistence)
+
+    async def memory(self, thread_id: str) -> WorkerMemory:
+        persistence = await self._ensure_initialized()
+        return WorkerMemory(thread_id=thread_id, persistence=persistence)
+
+    async def settings(self, worker_id: str) -> WorkerSettings:
+        persistence = await self._ensure_initialized()
+        if self._config.settings_schema and self._settings_broadcaster:
+            return WorkerSettings(
+                worker_id=worker_id,
+                schema=self._config.settings_schema,
+                persistence=persistence,
+                broadcaster=self._settings_broadcaster,
+            )
+
+        from dooers.features.settings.models import SettingsSchema
+
+        class _NoopBroadcaster:
+            async def broadcast_snapshot(self, **kwargs) -> None:
+                pass
+
+            async def broadcast_patch(self, **kwargs) -> None:
+                pass
+
+        class _NoopPersistence:
+            async def get_settings(self, worker_id: str) -> dict:
+                return {}
+
+            async def update_setting(self, worker_id: str, field_id: str, value) -> None:
+                pass
+
+            async def set_settings(self, worker_id: str, values: dict) -> None:
+                pass
+
+        return WorkerSettings(
+            worker_id=worker_id,
+            schema=SettingsSchema(fields=[]),
+            persistence=_NoopPersistence(),  # type: ignore
+            broadcaster=_NoopBroadcaster(),  # type: ignore
+        )
+
+    async def analytics(
+        self,
+        worker_id: str,
+        thread_id: str | None = None,
+        user_id: str | None = None,
+        run_id: str | None = None,
+    ) -> WorkerAnalytics:
+        await self._ensure_initialized()
+        if self._analytics_collector:
+            return WorkerAnalytics(
+                worker_id=worker_id,
+                thread_id=thread_id or "",
+                user_id=user_id,
+                run_id=run_id,
+                collector=self._analytics_collector,
+            )
+
+        class _NoopCollector:
+            async def track(self, **kwargs) -> None:
+                pass
+
+            async def feedback(self, **kwargs) -> None:
+                pass
+
+        return WorkerAnalytics(
+            worker_id=worker_id,
+            thread_id=thread_id or "",
+            user_id=user_id,
+            run_id=run_id,
+            collector=_NoopCollector(),  # type: ignore
+        )
+
+    async def _broadcast_dict_to_worker(self, worker_id: str, payload: dict) -> None:
+        """Convert dict payload to S2C frame and broadcast via registry."""
+        payload_type = payload.get("type")
+
+        if payload_type == "thread.upsert":
+            frame = S2C_ThreadUpsert(
+                id=str(uuid.uuid4()),
+                payload=ThreadUpsertPayload(thread=payload["thread"]),
+            )
+        elif payload_type == "event.append":
+            frame = S2C_EventAppend(
+                id=str(uuid.uuid4()),
+                payload=EventAppendPayload(
+                    thread_id=payload["thread_id"],
+                    events=payload["events"],
+                ),
+            )
+        elif payload_type == "run.upsert":
+            frame = S2C_RunUpsert(
+                id=str(uuid.uuid4()),
+                payload=RunUpsertPayload(run=payload["run"]),
+            )
+        else:
+            return
+
+        message = serialize_frame(frame)
+        await self._registry.broadcast(worker_id, message)
+
     async def close(self) -> None:
-        # Stop analytics collector
         if self._analytics_collector:
             await self._analytics_collector.stop()
             self._analytics_collector = None
 
-        # Disconnect persistence
         if self._persistence:
             await self._persistence.disconnect()
             self._persistence = None

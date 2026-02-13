@@ -5,14 +5,14 @@ from typing import Literal
 
 @dataclass
 class WorkerEvent:
-    response_type: str
+    send_type: str
     data: dict
 
 
-class WorkerResponse:
+class WorkerSend:
     def text(self, text: str, author: str | None = None) -> WorkerEvent:
         return WorkerEvent(
-            response_type="text",
+            send_type="text",
             data={"text": text, "author": author},
         )
 
@@ -24,7 +24,7 @@ class WorkerResponse:
         author: str | None = None,
     ) -> WorkerEvent:
         return WorkerEvent(
-            response_type="image",
+            send_type="image",
             data={"url": url, "mime_type": mime_type, "alt": alt, "author": author},
         )
 
@@ -36,7 +36,7 @@ class WorkerResponse:
         author: str | None = None,
     ) -> WorkerEvent:
         return WorkerEvent(
-            response_type="document",
+            send_type="document",
             data={"url": url, "filename": filename, "mime_type": mime_type, "author": author},
         )
 
@@ -48,7 +48,7 @@ class WorkerResponse:
         id: str | None = None,
     ) -> WorkerEvent:
         return WorkerEvent(
-            response_type="tool_call",
+            send_type="tool_call",
             data={
                 "id": id or str(uuid.uuid4()),
                 "name": name,
@@ -66,7 +66,26 @@ class WorkerResponse:
         id: str | None = None,
     ) -> WorkerEvent:
         return WorkerEvent(
-            response_type="tool_result",
+            send_type="tool_result",
+            data={
+                "id": id or str(uuid.uuid4()),
+                "name": name,
+                "display_name": display_name,
+                "args": args,
+                "result": result,
+            },
+        )
+
+    def tool_transaction(
+        self,
+        name: str,
+        args: dict,
+        result: dict,
+        display_name: str | None = None,
+        id: str | None = None,
+    ) -> WorkerEvent:
+        return WorkerEvent(
+            send_type="tool_transaction",
             data={
                 "id": id or str(uuid.uuid4()),
                 "name": name,
@@ -78,7 +97,7 @@ class WorkerResponse:
 
     def run_start(self, agent_id: str | None = None) -> WorkerEvent:
         return WorkerEvent(
-            response_type="run_start",
+            send_type="run_start",
             data={"agent_id": agent_id},
         )
 
@@ -88,12 +107,12 @@ class WorkerResponse:
         error: str | None = None,
     ) -> WorkerEvent:
         return WorkerEvent(
-            response_type="run_end",
+            send_type="run_end",
             data={"status": status, "error": error},
         )
 
     def update_thread(self, *, title: str | None = None) -> WorkerEvent:
         return WorkerEvent(
-            response_type="thread_update",
+            send_type="thread_update",
             data={"title": title},
         )

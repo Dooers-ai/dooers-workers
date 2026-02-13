@@ -23,7 +23,7 @@ class ConnectPayload(BaseModel):
     user_id: str
     user_name: str
     user_email: str
-    user_role: str  # "owner", "manager", "member"
+    user_role: str
     auth_token: str | None = None
     client: dict | None = None
 
@@ -95,9 +95,6 @@ class C2S_EventCreate(BaseModel):
     payload: EventCreatePayload
 
 
-# Analytics C2S payloads and frames
-
-
 class AnalyticsSubscribePayload(BaseModel):
     worker_id: str
 
@@ -129,9 +126,6 @@ class C2S_Feedback(BaseModel):
     id: str
     type: Literal["feedback"]
     payload: FeedbackPayload
-
-
-# Settings C2S payloads and frames
 
 
 class SettingsSubscribePayload(BaseModel):
@@ -258,9 +252,6 @@ class S2C_RunUpsert(BaseModel):
     payload: RunUpsertPayload
 
 
-# Analytics S2C frames
-
-
 class S2C_AnalyticsEvent(BaseModel):
     id: str
     type: Literal["analytics.event"] = "analytics.event"
@@ -278,9 +269,6 @@ class S2C_FeedbackAck(BaseModel):
     id: str
     type: Literal["feedback.ack"] = "feedback.ack"
     payload: FeedbackAckPayload
-
-
-# Settings S2C frames
 
 
 class SettingsSnapshotPayload(BaseModel):

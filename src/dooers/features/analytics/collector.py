@@ -21,7 +21,7 @@ class AnalyticsCollector:
         self,
         webhook_url: str,
         registry: ConnectionRegistry,
-        subscriptions: dict[str, set[str]],  # worker_id -> set of ws_ids
+        subscriptions: dict[str, set[str]],
         batch_size: int = 10,
         flush_interval: float = 5.0,
     ) -> None:
@@ -54,10 +54,8 @@ class AnalyticsCollector:
             self._flush_task = None
 
         try:
-            # Flush any remaining events
             await self._flush()
         finally:
-            # Always close HTTP client
             if self._http_client:
                 await self._http_client.aclose()
                 self._http_client = None
@@ -83,10 +81,8 @@ class AnalyticsCollector:
             data=data,
         )
 
-        # Broadcast to analytics subscribers immediately
         await self._broadcast(worker_id, payload)
 
-        # Add to batch buffer
         async with self._lock:
             self._buffer.append(payload)
             if len(self._buffer) >= self._batch_size:
@@ -116,13 +112,12 @@ class AnalyticsCollector:
         )
 
     async def _broadcast(self, worker_id: str, payload: AnalyticsEventPayload) -> None:
-        """Broadcast an analytics event to all subscribers for a worker."""
         from dooers.protocol.frames import S2C_AnalyticsEvent
 
         subscriber_ws_ids = self._subscriptions.get(worker_id, set())
         if not subscriber_ws_ids:
             logger.debug(
-                "[dooers-workers] analytics broadcast skipped — no subscribers for worker %s (subscriptions: %s)",
+                "[workers] analytics broadcast skipped — no subscribers for worker %s (subscriptions: %s)",
                 worker_id,
                 list(self._subscriptions.keys()),
             )
@@ -136,7 +131,7 @@ class AnalyticsCollector:
 
         connections = self._registry.get_connections(worker_id)
         logger.debug(
-            "[dooers-workers] analytics broadcast: event=%s, worker=%s, subscribers=%d, connections=%d",
+            "[workers] analytics broadcast: event=%s, worker=%s, subscribers=%d, connections=%d",
             payload.event,
             worker_id,
             len(subscriber_ws_ids),
@@ -148,8 +143,8 @@ class AnalyticsCollector:
                 await ws.send_text(message_json)
                 sent += 1
             except Exception as e:
-                logger.warning("[dooers-workers] failed to send analytics event to subscriber: %s", e)
-        logger.debug("[dooers-workers] analytics broadcast sent to %d/%d connections", sent, len(connections))
+                logger.warning("[workers] failed to send analytics event to subscriber: %s", e)
+        logger.debug("[workers] analytics broadcast sent to %d/%d connections", sent, len(connections))
 
     async def _flush(self) -> None:
         async with self._lock:
@@ -159,7 +154,6 @@ class AnalyticsCollector:
         if not self._buffer:
             return
 
-        # Group events by worker_id for separate batches
         events_by_worker: dict[str, list[AnalyticsEventPayload]] = {}
         for event in self._buffer:
             if event.worker_id not in events_by_worker:
@@ -168,7 +162,6 @@ class AnalyticsCollector:
 
         self._buffer.clear()
 
-        # Send batches per worker
         for worker_id, events in events_by_worker.items():
             batch = AnalyticsBatch(
                 batch_id=str(uuid4()),
@@ -190,12 +183,12 @@ class AnalyticsCollector:
             )
             if response.status_code >= 400:
                 logger.warning(
-                    "[dooers-workers] analytics webhook returned %d: %s",
+                    "[workers] analytics webhook returned %d: %s",
                     response.status_code,
                     response.text[:200],
                 )
         except httpx.RequestError as e:
-            logger.warning("[dooers-workers] failed to send analytics batch: %s", e)
+            logger.warning("[workers] failed to send analytics batch: %s", e)
 
     async def _flush_loop(self) -> None:
         while self._running:
@@ -205,4 +198,4 @@ class AnalyticsCollector:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.exception("[dooers-workers] error in analytics flush loop: %s", e)
+                logger.exception("[workers] error in analytics flush loop: %s", e)

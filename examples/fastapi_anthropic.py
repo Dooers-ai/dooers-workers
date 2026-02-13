@@ -56,8 +56,8 @@ worker_server = WorkerServer(
 client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 
-async def anthropic_agent(request, response, memory, analytics, settings):
-    yield response.run_start(agent_id="anthropic-claude")
+async def anthropic_agent(on, send, memory, analytics, settings):
+    yield send.run_start(agent_id="anthropic-claude")
 
     # Get settings
     model = await settings.get("model")
@@ -71,7 +71,7 @@ async def anthropic_agent(request, response, memory, analytics, settings):
     history = await memory.get_history(limit=20, format="anthropic")
 
     messages = list(history)
-    messages.append({"role": "user", "content": request.message})
+    messages.append({"role": "user", "content": on.message})
 
     result = await client.messages.create(
         model=model,
@@ -90,8 +90,9 @@ async def anthropic_agent(request, response, memory, analytics, settings):
         },
     )
 
-    yield response.text(result.content[0].text)
-    yield response.run_end()
+    yield send.text(result.content[0].text)
+    yield send.update_thread(title=on.message[:60])
+    yield send.run_end()
 
 
 @app.websocket("/ws")

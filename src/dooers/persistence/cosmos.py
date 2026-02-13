@@ -20,17 +20,6 @@ except ImportError:
 
 
 class CosmosPersistence:
-    """Azure Cosmos DB NoSQL persistence adapter.
-
-    Requires the 'cosmos' extra: pip install dooers-workers[cosmos]
-
-    Container structure (partitioned by worker_id):
-    - threads: Thread documents
-    - events: ThreadEvent documents (with thread_id for filtering)
-    - runs: Run documents
-    - settings: Settings documents
-    """
-
     def __init__(
         self,
         *,
@@ -40,7 +29,7 @@ class CosmosPersistence:
         table_prefix: str = "worker_",
     ):
         if not COSMOS_AVAILABLE:
-            raise ImportError("Azure Cosmos DB SDK not installed. Install with: pip install dooers-workers[cosmos]")
+            raise ImportError("Azure Cosmos DB SDK not installed. Install with: pip install workers[cosmos]")
 
         if not endpoint or not key or not database:
             raise ValueError(
@@ -61,13 +50,13 @@ class CosmosPersistence:
 
     async def connect(self) -> None:
         logger.info(
-            "[dooers-workers] connecting to cosmos db at %s (database=%s)",
+            "[workers] connecting to cosmos db at %s (database=%s)",
             self._endpoint,
             self._database_name,
         )
         self._client = CosmosClient(self._endpoint, credential=self._key)
         self._database = self._client.get_database_client(self._database_name)
-        logger.info("[dooers-workers] successfully connected to cosmos db")
+        logger.info("[workers] successfully connected to cosmos db")
 
     async def disconnect(self) -> None:
         if self._client:
@@ -93,10 +82,10 @@ class CosmosPersistence:
                     partition_key=PartitionKey(path="/worker_id"),
                 )
                 self._containers[container_name] = container
-                logger.info("[dooers-workers] cosmos container ready: %s", container_name)
+                logger.info("[workers] cosmos container ready: %s", container_name)
             except Exception as e:
                 logger.error(
-                    "[dooers-workers] failed to create cosmos container %s: %s",
+                    "[workers] failed to create cosmos container %s: %s",
                     container_name,
                     e,
                 )
@@ -111,7 +100,6 @@ class CosmosPersistence:
         return self._containers[container_name]
 
     async def _get_worker_id(self, thread_id: str) -> str | None:
-        """Get worker_id for a thread, using cache when available."""
         if thread_id in self._thread_worker_cache:
             return self._thread_worker_cache[thread_id]
 
@@ -157,10 +145,8 @@ class CosmosPersistence:
                     last_event_at=datetime.fromisoformat(row["last_event_at"]),
                 )
             except CosmosResourceNotFoundError:
-                # Cache is stale, remove and fall through to query
                 del self._thread_worker_cache[thread_id]
 
-        # Cross-partition query (only when cache miss)
         container = self._get_container("threads")
         query = "SELECT * FROM c WHERE c.id = @id"
         params = [{"name": "@id", "value": thread_id}]
@@ -171,7 +157,6 @@ class CosmosPersistence:
             return None
 
         row = items[0]
-        # Populate cache
         self._thread_worker_cache[thread_id] = row["worker_id"]
         return Thread(
             id=row["id"],
@@ -201,14 +186,12 @@ class CosmosPersistence:
         await container.upsert_item(doc)
 
     async def delete_thread(self, thread_id: str) -> None:
-        # First get the thread to find worker_id (partition key)
         thread = await self.get_thread(thread_id)
         if not thread:
             return
 
         worker_id = thread.worker_id
 
-        # Delete events for this thread
         events_container = self._get_container("events")
         query = "SELECT c.id FROM c WHERE c.thread_id = @thread_id AND c.worker_id = @worker_id"
         params = [
@@ -218,17 +201,14 @@ class CosmosPersistence:
         async for item in events_container.query_items(query, parameters=params):
             await events_container.delete_item(item["id"], partition_key=worker_id)
 
-        # Delete runs for this thread
         runs_container = self._get_container("runs")
         query = "SELECT c.id FROM c WHERE c.thread_id = @thread_id AND c.worker_id = @worker_id"
         async for item in runs_container.query_items(query, parameters=params):
             await runs_container.delete_item(item["id"], partition_key=worker_id)
 
-        # Delete the thread
         threads_container = self._get_container("threads")
         await threads_container.delete_item(thread_id, partition_key=worker_id)
 
-        # Invalidate cache
         self._thread_worker_cache.pop(thread_id, None)
 
     async def list_threads(
@@ -296,7 +276,6 @@ class CosmosPersistence:
         ]
 
     async def create_event(self, event: ThreadEvent) -> None:
-        # Get worker_id from cache (fast) or thread lookup (slow, cross-partition)
         worker_id = await self._get_worker_id(event.thread_id)
         if not worker_id:
             raise ValueError(f"Thread {event.thread_id} not found")
@@ -332,7 +311,6 @@ class CosmosPersistence:
         order: str = "asc",
         filters: dict[str, str] | None = None,
     ) -> list[ThreadEvent]:
-        # Get worker_id from cache (fast) or thread lookup (slow)
         worker_id = await self._get_worker_id(thread_id)
         if not worker_id:
             return []
@@ -344,7 +322,6 @@ class CosmosPersistence:
         params = [{"name": "@thread_id", "value": thread_id}]
 
         if after_event_id:
-            # Get reference event's timestamp
             ref_query = "SELECT c.created_at FROM c WHERE c.id = @id"
             ref_params = [{"name": "@id", "value": after_event_id}]
             ref_items = [item async for item in container.query_items(ref_query, parameters=ref_params)]
@@ -403,7 +380,6 @@ class CosmosPersistence:
         )
 
     async def create_run(self, run: Run) -> None:
-        # Get worker_id from cache (fast) or thread lookup (slow)
         worker_id = await self._get_worker_id(run.thread_id)
         if not worker_id:
             raise ValueError(f"Thread {run.thread_id} not found")
@@ -422,7 +398,6 @@ class CosmosPersistence:
         await container.create_item(doc)
 
     async def update_run(self, run: Run) -> None:
-        # Get worker_id from cache (fast) or thread lookup (slow)
         worker_id = await self._get_worker_id(run.thread_id)
         if not worker_id:
             raise ValueError(f"Thread {run.thread_id} not found")
@@ -456,7 +431,6 @@ class CosmosPersistence:
         return data
 
     async def get_settings(self, worker_id: str) -> dict[str, Any]:
-        """Get all stored values for a worker. Returns empty dict if none."""
         container = self._get_container("settings")
 
         try:
@@ -466,11 +440,9 @@ class CosmosPersistence:
             return {}
 
     async def update_setting(self, worker_id: str, field_id: str, value: Any) -> datetime:
-        """Update a single field value. Returns updated_at timestamp."""
         container = self._get_container("settings")
         now = datetime.now(UTC)
 
-        # Get existing values
         current_values = await self.get_settings(worker_id)
         current_values[field_id] = value
 
@@ -485,7 +457,6 @@ class CosmosPersistence:
         return now
 
     async def set_settings(self, worker_id: str, values: dict[str, Any]) -> datetime:
-        """Replace all settings values. Returns updated_at timestamp."""
         container = self._get_container("settings")
         now = datetime.now(UTC)
 

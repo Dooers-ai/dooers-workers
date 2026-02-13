@@ -373,6 +373,104 @@ class SqlitePersistence:
         )
         await self._conn.commit()
 
+    async def get_event(self, event_id: str) -> ThreadEvent | None:
+        if not self._conn:
+            raise RuntimeError("Not connected")
+
+        table = f"{self._prefix}events"
+        cursor = await self._conn.execute(
+            f"SELECT * FROM {table} WHERE id = ?",
+            (event_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        return self._row_to_event(row)
+
+    async def delete_event(self, event_id: str) -> None:
+        if not self._conn:
+            raise RuntimeError("Not connected")
+
+        table = f"{self._prefix}events"
+        await self._conn.execute(f"DELETE FROM {table} WHERE id = ?", (event_id,))
+        await self._conn.commit()
+
+    async def get_run(self, run_id: str) -> Run | None:
+        if not self._conn:
+            raise RuntimeError("Not connected")
+
+        table = f"{self._prefix}runs"
+        cursor = await self._conn.execute(
+            f"SELECT * FROM {table} WHERE id = ?",
+            (run_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        return Run(
+            id=row["id"],
+            thread_id=row["thread_id"],
+            agent_id=row["agent_id"],
+            status=row["status"],
+            started_at=datetime.fromisoformat(row["started_at"]),
+            ended_at=datetime.fromisoformat(row["ended_at"]) if row["ended_at"] else None,
+            error=row["error"],
+        )
+
+    async def list_runs(
+        self,
+        thread_id: str | None = None,
+        worker_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[Run]:
+        if not self._conn:
+            raise RuntimeError("Not connected")
+
+        runs_table = f"{self._prefix}runs"
+        threads_table = f"{self._prefix}threads"
+        needs_join = worker_id is not None
+        conditions: list[str] = []
+        params: list[Any] = []
+
+        if thread_id:
+            conditions.append("r.thread_id = ?")
+            params.append(thread_id)
+        if worker_id:
+            conditions.append("t.worker_id = ?")
+            params.append(worker_id)
+        if status:
+            conditions.append("r.status = ?")
+            params.append(status)
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        join = f"JOIN {threads_table} t ON r.thread_id = t.id" if needs_join else ""
+        params.append(limit)
+
+        query = f"""
+            SELECT r.* FROM {runs_table} r
+            {join}
+            {where}
+            ORDER BY r.started_at DESC
+            LIMIT ?
+        """
+
+        cursor = await self._conn.execute(query, tuple(params))
+        rows = await cursor.fetchall()
+
+        return [
+            Run(
+                id=row["id"],
+                thread_id=row["thread_id"],
+                agent_id=row["agent_id"],
+                status=row["status"],
+                started_at=datetime.fromisoformat(row["started_at"]),
+                ended_at=datetime.fromisoformat(row["ended_at"]) if row["ended_at"] else None,
+                error=row["error"],
+            )
+            for row in rows
+        ]
+
     def _serialize_content_part(self, part) -> dict:
         if hasattr(part, "model_dump"):
             return part.model_dump()

@@ -31,8 +31,8 @@ worker_server = WorkerServer(WorkerConfig(
 ))
 
 
-async def agent_handler(request, response, memory, analytics, settings):
-    yield response.run_start()
+async def agent_handler(on, send, memory, analytics, settings):
+    yield send.run_start()
 
     history = await memory.get_history(limit=20, format="openai")
 
@@ -44,9 +44,9 @@ async def agent_handler(request, response, memory, analytics, settings):
         ],
     )
 
-    yield response.text("Hello!", author="Support Bot")
-    yield response.text(completion.choices[0].message.content) 
-    yield response.run_end()
+    yield send.text(completion.choices[0].message.content)
+    yield send.update_thread(title=on.message[:60])
+    yield send.run_end()
 
 
 @app.websocket("/ws")
@@ -55,26 +55,57 @@ async def ws(websocket: WebSocket):
     await worker_server.handle(websocket, agent_handler)
 ```
 
-## agent_handler
+## Handler
 
 ```python
-async def agent_handler(request, response, memory, analytics, settings):
+async def agent_handler(on, send, memory, analytics, settings):
     ...
 ```
 
-### Request
+### on
+
+Incoming message context.
 
 ```python
-request.message      # str
-request.content      # list[ContentPart]
-request.thread_id    # str
-request.event_id     # str
-request.user_id      # str | None
-request.user_name    # str | None
-request.user_email   # str | None
+on.message           # str — extracted text from content parts
+on.content           # list[ContentPart]
+on.thread_id         # str
+on.event_id          # str
+on.organization_id   # str
+on.workspace_id      # str
+on.user_id           # str
+on.user_name         # str
+on.user_email        # str
+on.user_role         # str
+on.thread_title      # str | None
+on.thread_created_at # datetime | None
 ```
 
-### Memory
+### send
+
+Yield events back to the client.
+
+```python
+# Messages — with optional author override
+yield send.text("Hello, I'm your assistant.")
+yield send.text("Hello!", author="Support Bot")  # Override default assistant_name
+yield send.image(url, mime_type?, alt?, author?)
+yield send.document(url, filename, mime_type, author?)
+
+# Tool calls — with correlation ID for frontend rendering
+call_id = str(uuid.uuid4())
+yield send.tool_call(name, args, display_name?, id?)
+yield send.tool_result(name, result, args?, display_name?, id?)
+
+# Thread metadata
+yield send.update_thread(title="New title")
+
+# Run lifecycle
+yield send.run_start(agent_id?)
+yield send.run_end(status?, error?)
+```
+
+### memory
 
 ```python
 # Latest 50 messages in chronological order (default)
@@ -99,30 +130,7 @@ events = await memory.get_history_raw(limit=50)
 events = await memory.get_history_raw(limit=50, order="desc", filters={"type": "message"})
 ```
 
-### Response
-
-```python
-# Messages - with optional author override
-yield response.text("Hello, I'm your assistant.")
-yield response.text("Hello!", author="Support Bot")  # Override default assistant_name
-yield response.image(url, mime_type?, alt?, author?)
-yield response.document(url, filename, mime_type, author?)
-
-# Tool calls - with correlation ID for frontend rendering
-call_id = str(uuid.uuid4())
-yield response.tool_call(name, args, display_name?, id?)
-yield response.tool_result(name, result, args?, display_name?, id?)
-
-# Example: correlated tool call
-yield response.tool_call("search", {"q": "hello"}, display_name="Searching...", id=call_id)
-yield response.tool_result("search", {"results": [...]}, args={"q": "hello"}, id=call_id)
-
-# Run lifecycle
-yield response.run_start(agent_id?)
-yield response.run_end(status?, error?)
-```
-
-### Analytics
+### analytics
 
 ```python
 await analytics.track("event.name", data={"key": "value"})
@@ -130,58 +138,93 @@ await analytics.like("event", target_id, reason?)
 await analytics.dislike("event", target_id, reason?)
 ```
 
-### Settings
+### settings
 
 ```python
 value = await settings.get("field_id")
 all_values = await settings.get_all()
+all_values = await settings.get_all(exclude=["avatar_base64"])  # Strip large fields
 await settings.set("field_id", new_value)
 ```
 
-## worker_server
+## Dispatch
 
-### Persistence
-
-Direct database access for threads, events, and settings.
+Run handlers programmatically from REST endpoints, webhooks, or background jobs — without a WebSocket connection.
 
 ```python
+stream = await worker_server.dispatch(
+    handler=my_handler,
+    worker_id="worker-1",
+    organization_id="org-1",
+    workspace_id="ws-1",
+    message="Hello from webhook",
+    user_id="user-1",
+    user_name="Alice",
+    thread_id=None,           # None → creates new thread
+    thread_title="Webhook",   # Title for new threads
+)
 
-persistence = worker_server.persistence
+# Properties available immediately (before iteration)
+stream.thread_id       # str
+stream.event_id        # str
+stream.is_new_thread   # bool
 
-thread = await persistence.get_thread(thread_id)
-await persistence.create_thread(thread)
-await persistence.update_thread(thread)
-threads = await persistence.list_threads(worker_id, user_id, cursor, limit)
+# Stream events
+async for event in stream:
+    if event.send_type == "text":
+        print(event.data["text"])
 
-await persistence.create_event(event)
-events = await persistence.get_events(thread_id, limit=50, order="asc")
-events = await persistence.get_events(thread_id, order="desc", filters={"actor": "user"})
-
-settings = await persistence.get_settings(worker_id)
-await persistence.update_setting(worker_id, field_id, value)
+# Or collect all events at once
+events = await stream.collect()
 ```
 
-### Broadcast
+## Repository
 
-Pushes events to WebSocket subscribers. `send_event` also persists the event and updates the thread timestamp.
+CRUD interface for threads, events, runs, and settings.
 
 ```python
+repo = await worker_server.repository()
 
-broadcast = worker_server.broadcast
+# Threads
+threads = await repo.list_threads(filter={"worker_id": "w1", "organization_id": "org1", "workspace_id": "ws1"})
+thread = await repo.get_thread(thread_id)
+thread = await repo.create_thread(worker_id, organization_id, workspace_id, user_id, title?)
+thread = await repo.update_thread(thread_id, title="New title")
+await repo.remove_thread(thread_id)
 
-# Persist + broadcast a message (returns event, connections notified)
-event, count = await broadcast.send_event(worker_id, thread_id, content, actor)
+# Events
+events = await repo.list_events(filter={"thread_id": "t1"}, order={"direction": "asc"})
+event = await repo.get_event(event_id)
+event = await repo.create_event(thread_id, type="message", actor="user", content=[...])
+await repo.remove_event(event_id)
 
-# Broadcast a thread change (no persistence, notification only)
-count = await broadcast.send_thread_update(worker_id, thread)
+# Runs
+runs = await repo.list_runs(filter={"thread_id": "t1"})
+run = await repo.get_run(run_id)
 
-# Create thread + broadcast (convenience)
-thread, count = await broadcast.create_thread_and_broadcast(worker_id, user_id, title)
+# Settings
+values = await repo.get_settings(worker_id)
+await repo.update_settings(worker_id, {"key": "value"})
+```
+
+## Standalone Utilities
+
+Access memory, settings, and analytics outside of handlers.
+
+```python
+memory = await worker_server.memory(thread_id)
+history = await memory.get_history(limit=20, format="openai")
+
+settings = await worker_server.settings(worker_id)
+value = await settings.get("model")
+
+analytics = await worker_server.analytics(worker_id, thread_id="t1")
+await analytics.track("custom.event")
 ```
 
 ## Settings Schema
 
-Define configurable settings for your worker:
+Define configurable settings for your worker.
 
 ```python
 from dooers import (
@@ -189,6 +232,7 @@ from dooers import (
     WorkerServer,
     SettingsSchema,
     SettingsField,
+    SettingsFieldGroup,
     SettingsFieldType,
     SettingsSelectOption,
 )
@@ -205,13 +249,26 @@ schema = SettingsSchema(
                 SettingsSelectOption(value="gpt-4o", label="GPT-4o"),
             ],
         ),
+        SettingsFieldGroup(
+            id="advanced",
+            label="Advanced Settings",
+            collapsible="closed",
+            fields=[
+                SettingsField(
+                    id="temperature",
+                    type=SettingsFieldType.NUMBER,
+                    label="Temperature",
+                    value=0.7,
+                    min=0,
+                    max=2,
+                ),
+            ],
+        ),
         SettingsField(
-            id="temperature",
-            type=SettingsFieldType.NUMBER,
-            label="Temperature",
-            value=0.7,
-            min=0,
-            max=2,
+            id="api_key",
+            type=SettingsFieldType.PASSWORD,
+            label="API Key",
+            is_internal=True,  # Hidden from frontend, backend-only
         ),
     ]
 )
@@ -219,22 +276,43 @@ schema = SettingsSchema(
 worker_server = WorkerServer(WorkerConfig(
     database_type="sqlite",
     database_name="worker.db",
-    assistant_name="Settings Bot",
     settings_schema=schema,
 ))
 ```
 
 ### Field Types
 
-- `TEXT` - Single-line text input
-- `NUMBER` - Numeric input with optional min/max
-- `SELECT` - Dropdown selection
-- `CHECKBOX` - Boolean toggle
-- `TEXTAREA` - Multi-line text input
-- `PASSWORD` - Password input (hidden)
-- `EMAIL` - Email input
-- `DATE` - Date picker
-- `IMAGE` - Display-only image (e.g., QR codes)
+- `TEXT` — Single-line text input
+- `NUMBER` — Numeric input with optional min/max
+- `SELECT` — Dropdown selection
+- `CHECKBOX` — Boolean toggle
+- `TEXTAREA` — Multi-line text input
+- `PASSWORD` — Password input (hidden)
+- `EMAIL` — Email input
+- `DATE` — Date picker
+- `IMAGE` — Display-only image (e.g., QR codes)
+
+### Field Groups
+
+Groups organize related fields with an optional collapsible UI:
+
+```python
+SettingsFieldGroup(
+    id="group_id",
+    label="Group Label",
+    collapsible="open",    # "open" | "closed" | None (not collapsible)
+    is_internal=False,     # Hide entire group from frontend
+    fields=[...],
+)
+```
+
+### Internal Fields
+
+Fields with `is_internal=True` are:
+- Hidden from frontend settings snapshots
+- Rejected if a WebSocket client attempts to patch them
+- Suppressed from broadcast patch notifications
+- Accessible normally via `settings.get()` and `settings.get_all()` in handlers
 
 ## Database Configuration
 

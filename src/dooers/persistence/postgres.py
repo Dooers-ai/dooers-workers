@@ -12,16 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 def _build_ssl_context(ssl_config: bool | str) -> ssl_module.SSLContext | str | None:
-    """Build SSL config for asyncpg from bool or PostgreSQL SSL mode string.
 
-    For bool True or mode 'require': creates an explicit SSLContext with
-    certificate verification disabled, which is more compatible with managed
-    databases (AlloyDB, Cloud SQL) than asyncpg's built-in STARTTLS negotiation.
-
-    For string modes like 'prefer', 'verify-ca', 'verify-full': passes
-    through to asyncpg which handles them natively.
-    """
-    # Normalize string booleans
     if isinstance(ssl_config, str):
         lower = ssl_config.lower().strip()
         if lower in ("false", "0", "no", "off", "", "disable"):
@@ -31,7 +22,6 @@ def _build_ssl_context(ssl_config: bool | str) -> ssl_module.SSLContext | str | 
             ctx.check_hostname = False
             ctx.verify_mode = ssl_module.CERT_NONE
             return ctx
-        # Other PostgreSQL SSL modes (prefer, allow, verify-ca, verify-full)
         return ssl_config
 
     if ssl_config is True:
@@ -68,7 +58,7 @@ class PostgresPersistence:
         ssl_param = _build_ssl_context(self._ssl)
         ssl_display = self._ssl if isinstance(self._ssl, str) else ("require" if self._ssl else "disabled")
         logger.info(
-            "[dooers-workers] connecting to postgresql at %s:%s/%s (user=%s, ssl=%s)",
+            "[workers] connecting to postgresql at %s:%s/%s (user=%s, ssl=%s)",
             self._host,
             self._port,
             self._database,
@@ -88,10 +78,10 @@ class PostgresPersistence:
                 timeout=30,
                 command_timeout=30,
             )
-            logger.info("[dooers-workers] successfully connected to postgresql")
+            logger.info("[workers] successfully connected to postgresql")
         except TimeoutError:
             logger.error(
-                "[dooers-workers] connection to postgresql timed out. host=%s, port=%s, db=%s, ssl=%s. ",
+                "[workers] connection to postgresql timed out. host=%s, port=%s, db=%s, ssl=%s. ",
                 self._host,
                 self._port,
                 self._database,
@@ -100,7 +90,7 @@ class PostgresPersistence:
             raise
         except OSError as e:
             logger.error(
-                "[dooers-workers] cannot reach postgresql at %s:%s - %s. ",
+                "[workers] cannot reach postgresql at %s:%s - %s. ",
                 self._host,
                 self._port,
                 e,
@@ -108,14 +98,14 @@ class PostgresPersistence:
             raise
         except asyncpg.InvalidPasswordError:
             logger.error(
-                "[dooers-workers] authentication failed for user '%s' on database '%s'. ",
+                "[workers] authentication failed for user '%s' on database '%s'. ",
                 self._user,
                 self._database,
             )
             raise
         except Exception as e:
             logger.error(
-                "[dooers-workers] failed to connect to postgresql at %s:%s/%s - %s: %s",
+                "[workers] failed to connect to postgresql at %s:%s/%s - %s: %s",
                 self._host,
                 self._port,
                 self._database,
@@ -180,7 +170,6 @@ class PostgresPersistence:
                 )
             """)
 
-            # Incremental migrations for columns added after initial release
             await conn.execute(f"""
                 ALTER TABLE {events_table} ADD COLUMN IF NOT EXISTS run_id TEXT
             """)
@@ -194,15 +183,12 @@ class PostgresPersistence:
                 ALTER TABLE {events_table} ADD COLUMN IF NOT EXISTS author TEXT
             """)
 
-            # v0.5.0: Add organization_id and workspace_id to threads (multi-tenant support)
             await conn.execute(f"""
                 ALTER TABLE {threads_table} ADD COLUMN IF NOT EXISTS organization_id TEXT
             """)
             await conn.execute(f"""
                 ALTER TABLE {threads_table} ADD COLUMN IF NOT EXISTS workspace_id TEXT
             """)
-            # Make user_id NOT NULL for new records (existing may have NULL)
-            # Note: For existing databases with NULL values, manual migration may be needed
 
             await conn.execute(f"""
                 CREATE INDEX IF NOT EXISTS idx_{self._prefix}threads_worker_id
@@ -530,6 +516,107 @@ class PostgresPersistence:
                 run.id,
             )
 
+    async def get_event(self, event_id: str) -> ThreadEvent | None:
+        if not self._pool:
+            raise RuntimeError("Not connected")
+
+        table = f"{self._prefix}events"
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"SELECT * FROM {table} WHERE id = $1",
+                event_id,
+            )
+        if not row:
+            return None
+        return self._row_to_event(row)
+
+    async def delete_event(self, event_id: str) -> None:
+        if not self._pool:
+            raise RuntimeError("Not connected")
+
+        table = f"{self._prefix}events"
+        async with self._pool.acquire() as conn:
+            await conn.execute(f"DELETE FROM {table} WHERE id = $1", event_id)
+
+    async def get_run(self, run_id: str) -> Run | None:
+        if not self._pool:
+            raise RuntimeError("Not connected")
+
+        table = f"{self._prefix}runs"
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"SELECT * FROM {table} WHERE id = $1",
+                run_id,
+            )
+        if not row:
+            return None
+        return Run(
+            id=row["id"],
+            thread_id=row["thread_id"],
+            agent_id=row["agent_id"],
+            status=row["status"],
+            started_at=row["started_at"],
+            ended_at=row["ended_at"],
+            error=row["error"],
+        )
+
+    async def list_runs(
+        self,
+        thread_id: str | None = None,
+        worker_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[Run]:
+        if not self._pool:
+            raise RuntimeError("Not connected")
+
+        runs_table = f"{self._prefix}runs"
+        threads_table = f"{self._prefix}threads"
+        conditions: list[str] = []
+        params: list[Any] = []
+        idx = 1
+
+        if thread_id:
+            conditions.append(f"r.thread_id = ${idx}")
+            params.append(thread_id)
+            idx += 1
+        if worker_id:
+            conditions.append(f"t.worker_id = ${idx}")
+            params.append(worker_id)
+            idx += 1
+        if status:
+            conditions.append(f"r.status = ${idx}")
+            params.append(status)
+            idx += 1
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        params.append(limit)
+
+        join = f"JOIN {threads_table} t ON r.thread_id = t.id" if worker_id else ""
+        query = f"""
+            SELECT r.* FROM {runs_table} r
+            {join}
+            {where}
+            ORDER BY r.started_at DESC
+            LIMIT ${idx}
+        """
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(query, *params)
+
+        return [
+            Run(
+                id=row["id"],
+                thread_id=row["thread_id"],
+                agent_id=row["agent_id"],
+                status=row["status"],
+                started_at=row["started_at"],
+                ended_at=row["ended_at"],
+                error=row["error"],
+            )
+            for row in rows
+        ]
+
     def _serialize_content_part(self, part) -> dict:
         if hasattr(part, "model_dump"):
             return part.model_dump()
@@ -561,7 +648,6 @@ class PostgresPersistence:
             return {}
 
         values = row["values"]
-        # asyncpg returns JSONB as dict directly
         if isinstance(values, str):
             return json.loads(values)
         return values
@@ -574,7 +660,6 @@ class PostgresPersistence:
         table = f"{self._prefix}settings"
         now = datetime.now(UTC)
 
-        # Get existing values
         current_values = await self.get_settings(worker_id)
         current_values[field_id] = value
         values_json = json.dumps(current_values)
