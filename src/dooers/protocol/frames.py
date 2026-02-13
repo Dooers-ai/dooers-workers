@@ -4,7 +4,7 @@ from typing import Annotated, Any, Generic, Literal, TypeVar
 from pydantic import BaseModel, Field
 
 from dooers.features.analytics.models import AnalyticsEventPayload
-from dooers.features.settings.models import SettingsField
+from dooers.features.settings.models import SettingsField, SettingsFieldGroup
 from dooers.protocol.models import ContentPart, Run, Thread, ThreadEvent
 
 T = TypeVar("T")
@@ -273,7 +273,7 @@ class S2C_FeedbackAck(BaseModel):
 
 class SettingsSnapshotPayload(BaseModel):
     worker_id: str
-    fields: list[SettingsField]
+    fields: list[SettingsField | SettingsFieldGroup]
     updated_at: datetime
 
 

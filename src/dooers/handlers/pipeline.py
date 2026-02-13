@@ -123,10 +123,39 @@ class HandlerPipeline:
             )
         else:
             thread = await self._persistence.get_thread(thread_id)
-            if not thread:
-                raise ValueError(f"Thread not found: {thread_id}")
-            if thread.worker_id != context.worker_id:
-                raise PermissionError(f"Thread {thread_id} belongs to different worker")
+            if thread:
+                if thread.worker_id != context.worker_id:
+                    raise PermissionError(f"Thread {thread_id} belongs to different worker")
+            else:
+                # Auto-create thread for deterministic IDs (e.g., dispatch with pre-computed thread_id)
+                thread = Thread(
+                    id=thread_id,
+                    worker_id=context.worker_id,
+                    organization_id=context.organization_id,
+                    workspace_id=context.workspace_id,
+                    user_id=context.user_id,
+                    title=context.thread_title,
+                    created_at=now,
+                    updated_at=now,
+                    last_event_at=now,
+                )
+                await self._persistence.create_thread(thread)
+                is_new_thread = True
+
+                await self._broadcast(
+                    context.worker_id,
+                    {
+                        "type": "thread.upsert",
+                        "thread": thread,
+                    },
+                )
+
+                await self._track_event(
+                    context.worker_id,
+                    AnalyticsEvent.THREAD_CREATED.value,
+                    thread_id=thread_id,
+                    user_id=context.user_id,
+                )
 
         content_parts = self._convert_content_parts(context.content) if context.content else [TextPart(text=context.message)]
 

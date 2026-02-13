@@ -31,22 +31,28 @@ class SettingsBroadcaster:
     ) -> None:
         from dooers.protocol.frames import S2C_SettingsSnapshot, SettingsSnapshotPayload
 
-        from .models import SettingsField, _collect_all_fields
+        from .models import SettingsField, SettingsFieldGroup
 
         public_items = schema.get_public_fields()
 
-        fields_with_values: list[SettingsField] = []
-        for field in _collect_all_fields(public_items):
-            field_copy = field.model_copy()
+        def _inject_values(field: SettingsField) -> SettingsField:
             if field.id in values:
-                field_copy.value = values[field.id]
-            fields_with_values.append(field_copy)
+                return field.model_copy(update={"value": values[field.id]})
+            return field
+
+        items_with_values: list[SettingsField | SettingsFieldGroup] = []
+        for item in public_items:
+            if isinstance(item, SettingsFieldGroup):
+                updated_fields = [_inject_values(f) for f in item.fields]
+                items_with_values.append(item.model_copy(update={"fields": updated_fields}))
+            else:
+                items_with_values.append(_inject_values(item))
 
         message = S2C_SettingsSnapshot(
             id=str(uuid4()),
             payload=SettingsSnapshotPayload(
                 worker_id=worker_id,
-                fields=fields_with_values,
+                fields=items_with_values,
                 updated_at=datetime.now(UTC),
             ),
         )

@@ -35,12 +35,15 @@ poe pcu:upgrade         # Upgrade dependencies
 src/dooers/
 ├── server.py           # WorkerServer: main entry point, manages connections
 ├── config.py           # WorkerConfig: database and feature configuration
+├── dispatch.py         # DispatchStream: programmatic handler execution
+├── repository.py       # Repository: direct DB access for threads/events
 ├── registry.py         # ConnectionRegistry: tracks active WebSocket connections
 ├── broadcast.py        # BroadcastManager: push events to subscribers
 ├── handlers/
 │   ├── router.py       # Frame routing and agent handler execution
-│   ├── request.py      # WorkerRequest: incoming message data
-│   ├── response.py     # WorkerResponse: yield events back to client
+│   ├── pipeline.py     # HandlerPipeline: shared setup/execute for WS and dispatch
+│   ├── on.py           # WorkerOn: incoming message context
+│   ├── send.py         # WorkerSend: factory for yielding response events
 │   └── memory.py       # WorkerMemory: conversation history access
 ├── protocol/
 │   ├── models.py       # Thread, ThreadEvent, Run, ContentPart models
@@ -57,15 +60,15 @@ src/dooers/
 
 ### Handler Pattern
 
-Agent handlers are async generators that receive request context and yield response events:
+Agent handlers are async generators that receive context and yield response events:
 
 ```python
-async def agent_handler(request, response, memory, analytics, settings):
-    yield response.run_start()
+async def agent_handler(on, send, memory, analytics, settings):
+    yield send.run_start()
     history = await memory.get_history(limit=20, format="openai")
     # ... LLM call ...
-    yield response.text("response text")
-    yield response.run_end()
+    yield send.text("response text")
+    yield send.run_end()
 ```
 
 ### WebSocket Protocol
