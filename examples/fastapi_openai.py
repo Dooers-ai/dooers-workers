@@ -14,7 +14,6 @@ from dooers import (
 
 app = FastAPI()
 
-# Define settings schema for this worker
 settings_schema = SettingsSchema(
     fields=[
         SettingsField(
@@ -56,23 +55,21 @@ worker_server = WorkerServer(
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
-async def openai_agent(on, send, memory, analytics, settings):
+async def openai_agent(incoming, send, memory, analytics, settings):
     yield send.run_start(agent_id="openai-gpt")
 
-    # Get settings
     model = await settings.get("model")
     temperature = await settings.get("temperature")
     system_prompt = await settings.get("system_prompt")
 
-    # Track custom event
     await analytics.track("llm.request", data={"model": model})
 
-    # Get formatted history (defaults to OpenAI format)
+    # get_history() returns messages formatted for the LLM provider
     history = await memory.get_history(limit=20)
 
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(history)
-    messages.append({"role": "user", "content": on.message})
+    messages.append({"role": "user", "content": incoming.message})
 
     completion = await client.chat.completions.create(
         model=model,
@@ -80,7 +77,6 @@ async def openai_agent(on, send, memory, analytics, settings):
         messages=messages,
     )
 
-    # Track token usage
     await analytics.track(
         "llm.response",
         data={
@@ -90,7 +86,7 @@ async def openai_agent(on, send, memory, analytics, settings):
     )
 
     yield send.text(completion.choices[0].message.content)
-    yield send.update_thread(title=on.message[:60])
+    yield send.update_thread(title=incoming.message[:60])
     yield send.run_end()
 
 

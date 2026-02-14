@@ -1,13 +1,19 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from dooers.protocol.models import ContentPart
-
 
 @dataclass
-class WorkerOn:
-    message: str
-    content: list[ContentPart]
+class WorkerContext:
+    """Contextual metadata for the incoming message.
+
+    Provides "where and who" information:
+    - Where: thread_id, organization_id, workspace_id
+    - Who: user_id, user_name, user_email, user_role
+    - When: thread_created_at
+
+    Always present in handlers and dispatch flows.
+    """
+
     thread_id: str
     event_id: str
     organization_id: str

@@ -19,7 +19,7 @@ worker_server = WorkerServer(
 @function_tool
 def get_weather(city: str) -> str:
     """Get the weather for a city."""
-    return f"The weather in {city} is sunny, 22°C."
+    return f"The weather in {city} is sunny, 22C."
 
 
 agent = Agent(
@@ -29,24 +29,24 @@ agent = Agent(
 )
 
 
-async def openai_agents_handler(on, send, memory, analytics, settings):
+async def openai_agents_handler(incoming, send, memory, analytics, settings):
     yield send.run_start(agent_id="openai-agents")
 
-    history = await memory.get_history(limit=20)
+    # get_history_raw() returns ThreadEvent objects for manual conversion
+    events = await memory.get_history_raw(limit=20, order="asc")
 
     input_messages = []
-    for event in history:
+    for event in events:
         if event.type == "message" and event.content:
             text = " ".join(part.text for part in event.content if hasattr(part, "text"))
             if text:
                 role = "user" if event.actor == "user" else "assistant"
                 input_messages.append({"role": role, "content": text})
 
-    input_messages.append({"role": "user", "content": on.message})
+    input_messages.append({"role": "user", "content": incoming.message})
 
     result = await Runner.run(agent, input=input_messages)
 
-    # Track tool call IDs for correlation
     tool_call_ids: dict[str, str] = {}
 
     for item in result.new_items:
@@ -69,7 +69,7 @@ async def openai_agents_handler(on, send, memory, analytics, settings):
             )
 
     yield send.text(result.final_output)
-    yield send.update_thread(title=on.message[:60])
+    yield send.update_thread(title=incoming.message[:60])
     yield send.run_end()
 
 

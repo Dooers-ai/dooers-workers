@@ -1,6 +1,6 @@
 # dooers-workers
 
-dooers.ai SDK for creating agent workers
+Python SDK for building AI agent workers on the dooers.ai platform.
 
 ## Install
 
@@ -8,13 +8,29 @@ dooers.ai SDK for creating agent workers
 pip install dooers-workers
 ```
 
-Or from source:
+## How It Works
 
-```bash
-pip install git+https://github.com/dooers/dooers-workers.git
+The SDK has two entry points for executing handlers:
+
+```
+WebSocket (real-time chat)          Everything else (REST, webhooks, cron)
+─────────────────────────           ────────────────────────────────────────
+Client connects via WS              Your code calls dispatch()
+  ↓                                   ↓
+worker_server.handle()              worker_server.dispatch()
+  ↓                                   ↓
+Context from WS frame               Context from your parameters
+  ↓                                   ↓
+  └──────────── handler(incoming, send, memory, analytics, settings) ──┘
+                                   ↓
+                          Same handler, same API
 ```
 
-## Usage
+**The handler is always the same.** Whether the message came from a WebSocket or a REST endpoint, the handler receives the same parameters and yields the same events.
+
+## Quick Start — WebSocket
+
+The primary entry point. A WebSocket connection sends messages, and the handler responds in real-time.
 
 ```python
 from fastapi import FastAPI, WebSocket
@@ -27,11 +43,11 @@ openai = AsyncOpenAI()
 worker_server = WorkerServer(WorkerConfig(
     database_type="sqlite",
     database_name="worker.db",
-    assistant_name="My Assistant",  # Display name for assistant responses
+    assistant_name="My Assistant",
 ))
 
 
-async def agent_handler(on, send, memory, analytics, settings):
+async def agent_handler(incoming, send, memory, analytics, settings):
     yield send.run_start()
 
     history = await memory.get_history(limit=20, format="openai")
@@ -45,7 +61,7 @@ async def agent_handler(on, send, memory, analytics, settings):
     )
 
     yield send.text(completion.choices[0].message.content)
-    yield send.update_thread(title=on.message[:60])
+    yield send.update_thread(title=incoming.message[:60])
     yield send.run_end()
 
 
@@ -55,30 +71,62 @@ async def ws(websocket: WebSocket):
     await worker_server.handle(websocket, agent_handler)
 ```
 
-## Handler
+## Quick Start — Dispatch
+
+For REST endpoints, webhooks, background jobs — anything outside a WebSocket connection. You provide the context explicitly and iterate over the handler's events.
 
 ```python
-async def agent_handler(on, send, memory, analytics, settings):
+@app.post("/api/webhook")
+async def webhook(request: Request):
+    body = await request.json()
+
+    stream = await worker_server.dispatch(
+        handler=agent_handler,       # Same handler as WebSocket
+        worker_id="worker-1",
+        organization_id="org-1",
+        workspace_id="ws-1",
+        message=body["text"],
+        user_id=body["user_id"],
+        user_name="Alice",
+        thread_id=body.get("thread_id"),   # None → creates new thread
+        thread_title="Webhook conversation",
+    )
+
+    # Stream events from the handler
+    async for event in stream:
+        if event.send_type == "text":
+            print(event.data["text"])
+
+    return {"thread_id": stream.thread_id, "is_new": stream.is_new_thread}
+```
+
+## Handler
+
+Handlers are async generators that receive context and yield response events.
+
+```python
+async def agent_handler(incoming, send, memory, analytics, settings):
     ...
 ```
 
-### on
+### incoming
 
-Incoming message context.
+The incoming message and its context.
 
 ```python
-on.message           # str — extracted text from content parts
-on.content           # list[ContentPart]
-on.thread_id         # str
-on.event_id          # str
-on.organization_id   # str
-on.workspace_id      # str
-on.user_id           # str
-on.user_name         # str
-on.user_email        # str
-on.user_role         # str
-on.thread_title      # str | None
-on.thread_created_at # datetime | None
+incoming.message                     # str — extracted text
+incoming.content                     # list[ContentPart] — full content parts
+
+incoming.context.thread_id           # str
+incoming.context.event_id            # str
+incoming.context.organization_id     # str
+incoming.context.workspace_id        # str
+incoming.context.user_id             # str
+incoming.context.user_name           # str
+incoming.context.user_email          # str
+incoming.context.user_role           # str
+incoming.context.thread_title        # str | None
+incoming.context.thread_created_at   # datetime | None
 ```
 
 ### send
@@ -86,14 +134,13 @@ on.thread_created_at # datetime | None
 Yield events back to the client.
 
 ```python
-# Messages — with optional author override
-yield send.text("Hello, I'm your assistant.")
-yield send.text("Hello!", author="Support Bot")  # Override default assistant_name
+# Messages
+yield send.text("Hello!")
+yield send.text("Hello!", author="Support Bot")   # Override assistant_name
 yield send.image(url, mime_type?, alt?, author?)
 yield send.document(url, filename, mime_type, author?)
 
-# Tool calls — with correlation ID for frontend rendering
-call_id = str(uuid.uuid4())
+# Tool calls
 yield send.tool_call(name, args, display_name?, id?)
 yield send.tool_result(name, result, args?, display_name?, id?)
 
@@ -107,27 +154,24 @@ yield send.run_end(status?, error?)
 
 ### memory
 
+Conversation history in multiple formats.
+
 ```python
-# Latest 50 messages in chronological order (default)
-messages = await memory.get_history(limit=50)
-
-# Oldest 50 messages in chronological order
-messages = await memory.get_history(limit=50, order="asc")
-
-# Format for different LLM providers
-messages = await memory.get_history(format="openai")
+# LLM-formatted dicts (ready to pass to your model)
+messages = await memory.get_history(limit=20, format="openai")
 messages = await memory.get_history(format="anthropic")
 messages = await memory.get_history(format="google")
 messages = await memory.get_history(format="cohere")
-messages = await memory.get_history(format="voyage")
 
-# Filter by event fields
-messages = await memory.get_history(filters={"user_email": "alice@example.com"})
+# Chronological order
+messages = await memory.get_history(limit=50, order="asc")
+
+# Filter by fields
 messages = await memory.get_history(filters={"actor": "user"})
 
-# Raw ThreadEvent objects
+# Raw ThreadEvent objects (for manual conversion)
 events = await memory.get_history_raw(limit=50)
-events = await memory.get_history_raw(limit=50, order="desc", filters={"type": "message"})
+events = await memory.get_history_raw(limit=50, order="asc", filters={"type": "message"})
 ```
 
 ### analytics
@@ -143,13 +187,13 @@ await analytics.dislike("event", target_id, reason?)
 ```python
 value = await settings.get("field_id")
 all_values = await settings.get_all()
-all_values = await settings.get_all(exclude=["avatar_base64"])  # Strip large fields
+all_values = await settings.get_all(exclude=["avatar_base64"])
 await settings.set("field_id", new_value)
 ```
 
-## Dispatch
+## Dispatch API
 
-Run handlers programmatically from REST endpoints, webhooks, or background jobs — without a WebSocket connection.
+Full signature for programmatic handler execution.
 
 ```python
 stream = await worker_server.dispatch(
@@ -159,17 +203,20 @@ stream = await worker_server.dispatch(
     workspace_id="ws-1",
     message="Hello from webhook",
     user_id="user-1",
-    user_name="Alice",
-    thread_id=None,           # None → creates new thread
-    thread_title="Webhook",   # Title for new threads
+    user_name="Alice",              # optional
+    user_email="alice@example.com", # optional
+    user_role="member",             # optional
+    thread_id=None,                 # None → creates new thread
+    thread_title="Webhook",         # title for new threads
+    content=None,                   # optional list of ContentPart
 )
 
-# Properties available immediately (before iteration)
+# Available immediately (before iterating)
 stream.thread_id       # str
 stream.event_id        # str
 stream.is_new_thread   # bool
 
-# Stream events
+# Iterate to run the handler
 async for event in stream:
     if event.send_type == "text":
         print(event.data["text"])
@@ -178,15 +225,35 @@ async for event in stream:
 events = await stream.collect()
 ```
 
+### Error Handling
+
+```python
+from dooers import DispatchError, HandlerError
+
+try:
+    stream = await worker_server.dispatch(...)
+except DispatchError:
+    # Setup failed (bad parameters, DB error)
+    pass
+
+try:
+    async for event in stream:
+        ...
+except HandlerError as e:
+    # Handler raised during execution
+    # Pipeline already cleaned up (logged, run marked failed, error event created)
+    print(e.original)  # The original exception
+```
+
 ## Repository
 
-CRUD interface for threads, events, runs, and settings.
+Direct database access for threads, events, runs, and settings.
 
 ```python
 repo = await worker_server.repository()
 
 # Threads
-threads = await repo.list_threads(filter={"worker_id": "w1", "organization_id": "org1", "workspace_id": "ws1"})
+threads = await repo.list_threads(filter={"worker_id": "w1", "organization_id": "org1"})
 thread = await repo.get_thread(thread_id)
 thread = await repo.create_thread(worker_id, organization_id, workspace_id, user_id, title?)
 thread = await repo.update_thread(thread_id, title="New title")
@@ -316,7 +383,7 @@ Fields with `is_internal=True` are:
 
 ## Database Configuration
 
-The SDK supports three database backends: PostgreSQL, SQLite, and Azure Cosmos DB.
+Three database backends: PostgreSQL, SQLite, and Azure Cosmos DB.
 
 ### PostgreSQL (default)
 
@@ -328,7 +395,7 @@ worker_server = WorkerServer(WorkerConfig(
     database_user="postgres",
     database_name="mydb",
     database_password="secret",
-    database_ssl=False,  # or "require", "verify-full", etc.
+    database_ssl=False,
     database_table_prefix="worker_",
     database_auto_migrate=True,
 ))
@@ -352,7 +419,7 @@ Requires the cosmos extra: `pip install dooers-workers[cosmos]`
 ```python
 worker_server = WorkerServer(WorkerConfig(
     database_type="cosmos",
-    database_host="https://your-account.documents.azure.com:443/",  # endpoint
+    database_host="https://your-account.documents.azure.com:443/",
     database_name="your-database",
     database_key="your-cosmos-key",
     database_table_prefix="worker_",
@@ -361,8 +428,6 @@ worker_server = WorkerServer(WorkerConfig(
 ```
 
 ### Environment Variables
-
-All database fields can be configured via environment variables:
 
 | Field | Environment Variable |
 |-------|---------------------|
@@ -376,17 +441,34 @@ All database fields can be configured via environment variables:
 
 ## Thread Privacy
 
-By default, all users connected to a worker can see all threads (team collaboration mode). Enable `private_threads` to restrict users to only their own threads:
+Enable `private_threads` to restrict users to only their own threads:
 
 ```python
 worker_server = WorkerServer(WorkerConfig(
     database_type="postgres",
     database_name="mydb",
-    private_threads=True,  # Users only see their own threads
+    private_threads=True,
 ))
 ```
 
-When `private_threads=True`:
-- Thread listing (`thread.list`) filters by the connected user's `user_id`
+When enabled:
+- Thread listing filters by the connected user's `user_id`
 - Each user only sees threads they created
 - Useful for multi-tenant or personal assistant scenarios
+
+## Examples
+
+See [`examples/`](examples/) for complete working examples:
+
+| Example | Entry Point | Description |
+|---------|-------------|-------------|
+| [`fastapi_basic.py`](examples/fastapi_basic.py) | WebSocket | Minimal echo handler |
+| [`fastapi_openai.py`](examples/fastapi_openai.py) | WebSocket | OpenAI chat completions |
+| [`fastapi_anthropic.py`](examples/fastapi_anthropic.py) | WebSocket | Anthropic Claude |
+| [`fastapi_vertex.py`](examples/fastapi_vertex.py) | WebSocket | Google Vertex AI |
+| [`fastapi_tools.py`](examples/fastapi_tools.py) | WebSocket | Tool calls with OpenAI |
+| [`fastapi_langchain.py`](examples/fastapi_langchain.py) | WebSocket | LangChain integration |
+| [`fastapi_langgraph.py`](examples/fastapi_langgraph.py) | WebSocket | LangGraph ReAct agent |
+| [`fastapi_openai_agents.py`](examples/fastapi_openai_agents.py) | WebSocket | OpenAI Agents SDK |
+| [`fastapi_multiple_endpoints.py`](examples/fastapi_multiple_endpoints.py) | Both | WebSocket + REST dispatch |
+| [`fastapi_whatsapp_webhook.py`](examples/fastapi_whatsapp_webhook.py) | Dispatch | WhatsApp webhook with customer lookup |

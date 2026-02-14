@@ -5,6 +5,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol
 
+from dooers.exceptions import HandlerError
 from dooers.handlers.pipeline import Handler, HandlerContext, HandlerPipeline
 from dooers.persistence.base import Persistence
 from dooers.protocol.frames import (
@@ -422,8 +423,11 @@ class Router:
 
         await self._send_ack(ws, frame.id)
 
-        async for _event in self._pipeline.execute(context, result):
-            pass
+        try:
+            async for _event in self._pipeline.execute(context, result):
+                pass
+        except HandlerError:
+            pass  # Pipeline already handled cleanup (error event, run failure, broadcast)
 
     async def _handle_analytics_subscribe(
         self,

@@ -1,11 +1,10 @@
-"""WhatsApp webhook using the dispatch() API.
+"""WhatsApp webhook using dispatch().
 
-Demonstrates an external webhook flow:
-- Simulated DB lookup to resolve phone → organization/workspace
-- Uses repo.list_threads() to find or create threads per phone/worker
-- Dispatches a handler via worker_server.dispatch()
-- Streams events back, forwarding text replies to a simulated WhatsApp API
-- Uses send.update_thread(title=...) for descriptive thread titles
+External webhook flow:
+- Phone → customer lookup → resolve org/workspace context
+- Find or create thread per phone/worker
+- Dispatch handler with explicit context
+- Stream events back, forward text replies to WhatsApp
 """
 
 import logging
@@ -42,26 +41,24 @@ CUSTOMER_DB: dict[str, dict] = {
 
 
 def get_customer(phone: str) -> dict | None:
-    """Simulated DB lookup: phone → customer record."""
     return CUSTOMER_DB.get(phone)
 
 
 async def send_whatsapp_message(phone: str, text: str) -> None:
-    """Simulated WhatsApp API call (replace with real Evolution API / Cloud API)."""
-    logger.info("[whatsapp] → %s: %s", phone, text[:80])
+    logger.info("[whatsapp] -> %s: %s", phone, text[:80])
 
 
-# --- Handler ---
+# --- Handler (same API for both WebSocket and dispatch) ---
 
 
-async def whatsapp_handler(on, send, memory, analytics, settings):
+async def whatsapp_handler(incoming, send, memory, analytics, settings):
     yield send.run_start(agent_id="whatsapp-echo")
-    yield send.text(f"Echo: {on.message}")
-    yield send.update_thread(title=on.message[:60])
+    yield send.text(f"Echo: {incoming.message}")
+    yield send.update_thread(title=incoming.message[:60])
     yield send.run_end()
 
 
-# --- Webhook endpoint ---
+# --- Webhook endpoint (dispatch) ---
 
 
 @app.post("/webhook/{worker_id}")
@@ -73,7 +70,6 @@ async def webhook(worker_id: str, request: Request):
     if not phone or not text:
         return {"status": "ignored"}
 
-    # 1. Look up customer by phone number
     customer = get_customer(phone)
     if not customer:
         return {"status": "unknown_customer"}
@@ -82,7 +78,7 @@ async def webhook(worker_id: str, request: Request):
     workspace_id = customer["workspace_id"]
     customer_name = customer.get("name", phone)
 
-    # 2. Find existing thread for this phone/worker
+    # Find existing thread for this phone/worker
     repo = await worker_server.repository()
     threads = await repo.list_threads(
         filter={
@@ -95,7 +91,7 @@ async def webhook(worker_id: str, request: Request):
     )
     thread_id = threads[0].id if threads else None
 
-    # 3. Dispatch handler
+    # Dispatch handler with explicit context
     stream = await worker_server.dispatch(
         handler=whatsapp_handler,
         worker_id=worker_id,
@@ -108,7 +104,7 @@ async def webhook(worker_id: str, request: Request):
         thread_title=f"WhatsApp: {customer_name}" if not thread_id else None,
     )
 
-    # 4. Stream events and forward text replies to WhatsApp
+    # Stream events, forward text replies to WhatsApp
     async for event in stream:
         if event.send_type == "text":
             await send_whatsapp_message(phone, event.data["text"])

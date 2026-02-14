@@ -1,9 +1,8 @@
-"""Multiple entry points using the same worker server.
+"""Multiple entry points: WebSocket for real-time chat, REST for dispatch.
 
-Demonstrates three different ways to interact with the same worker:
-- WebSocket /ws — standard real-time chat
-- POST /api/summarize — REST endpoint that dispatches a summarization handler
-- POST /api/notify — inject a system notification into a thread
+- WebSocket /ws         — real-time chat via handler
+- POST /api/summarize   — dispatch a summarization handler on an existing thread
+- POST /api/notify      — inject a system notification into a thread via dispatch
 """
 
 from fastapi import FastAPI, Request, WebSocket
@@ -25,40 +24,36 @@ ORG_ID = "org_demo"
 WS_ID = "ws_demo"
 
 
-# --- Handlers ---
+# --- Handlers (identical API for WebSocket and dispatch) ---
 
 
-async def chat_handler(on, send, memory, analytics, settings):
-    """Standard chat handler for WebSocket connections."""
+async def chat_handler(incoming, send, memory, analytics, settings):
     yield send.run_start(agent_id="chat")
-    yield send.text(f"You said: {on.message}")
-    yield send.update_thread(title=on.message[:60])
+    yield send.text(f"You said: {incoming.message}")
+    yield send.update_thread(title=incoming.message[:60])
     yield send.run_end()
 
 
-async def summarize_handler(on, send, memory, analytics, settings):
-    """Summarization handler — reads history and produces a summary."""
+async def summarize_handler(incoming, send, memory, analytics, settings):
     yield send.run_start(agent_id="summarizer")
 
     history = await memory.get_history(limit=50)
     message_count = len(history)
 
-    # In a real app, you'd pass history to an LLM for summarization
-    summary = f"Thread summary: {message_count} messages. Latest: {on.message[:80]}"
+    summary = f"Thread summary: {message_count} messages. Latest: {incoming.message[:80]}"
 
     yield send.text(summary)
     yield send.update_thread(title="Summary")
     yield send.run_end()
 
 
-async def notify_handler(on, send, memory, analytics, settings):
-    """Simple notification handler — no LLM, just injects a system message."""
+async def notify_handler(incoming, send, memory, analytics, settings):
     yield send.run_start(agent_id="notifier")
-    yield send.text(on.message, author="System")
+    yield send.text(incoming.message, author="System")
     yield send.run_end()
 
 
-# --- Endpoints ---
+# --- WebSocket entry point (real-time) ---
 
 
 @app.websocket("/ws")
@@ -67,9 +62,11 @@ async def websocket_endpoint(websocket: WebSocket):
     await worker_server.handle(websocket, chat_handler)
 
 
+# --- REST entry points (dispatch) ---
+
+
 @app.post("/api/summarize")
 async def summarize(request: Request):
-    """Dispatch summarization on an existing thread, return collected text."""
     body = await request.json()
     thread_id = body.get("thread_id")
     if not thread_id:
@@ -95,7 +92,6 @@ async def summarize(request: Request):
 
 @app.post("/api/notify")
 async def notify(request: Request):
-    """Inject a system notification into a thread."""
     body = await request.json()
     thread_id = body.get("thread_id")
     message = body.get("message", "")

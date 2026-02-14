@@ -7,11 +7,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from dooers.exceptions import HandlerError
 from dooers.features.analytics.models import AnalyticsEvent
 from dooers.features.analytics.worker_analytics import WorkerAnalytics
 from dooers.features.settings.worker_settings import WorkerSettings
+from dooers.handlers.context import WorkerContext
+from dooers.handlers.incoming import WorkerIncoming
 from dooers.handlers.memory import WorkerMemory
-from dooers.handlers.on import WorkerOn
 from dooers.handlers.send import WorkerEvent, WorkerSend
 from dooers.persistence.base import Persistence
 from dooers.protocol.models import (
@@ -40,7 +42,7 @@ def _now() -> datetime:
 
 
 Handler = Callable[
-    [WorkerOn, WorkerSend, WorkerMemory, WorkerAnalytics, WorkerSettings],
+    [WorkerIncoming, WorkerSend, WorkerMemory, WorkerAnalytics, WorkerSettings],
     AsyncGenerator[WorkerEvent, None],
 ]
 
@@ -207,9 +209,7 @@ class HandlerPipeline:
         thread = result.thread
 
         message = self._extract_message(result.user_event.content or [])
-        on = WorkerOn(
-            message=message,
-            content=result.user_event.content or [],
+        worker_context = WorkerContext(
             thread_id=thread_id,
             event_id=result.user_event.id,
             organization_id=context.organization_id,
@@ -220,6 +220,11 @@ class HandlerPipeline:
             user_role=context.user_role or "",
             thread_title=thread.title,
             thread_created_at=thread.created_at,
+        )
+        incoming = WorkerIncoming(
+            message=message,
+            content=result.user_event.content or [],
+            context=worker_context,
         )
         send = WorkerSend()
         memory = WorkerMemory(thread_id=thread_id, persistence=self._persistence)
@@ -235,7 +240,7 @@ class HandlerPipeline:
         current_run_id: str | None = None
 
         try:
-            async for event in context.handler(on, send, memory, analytics, settings):
+            async for event in context.handler(incoming, send, memory, analytics, settings):
                 event_now = _now()
 
                 if event.send_type == "run_start":
@@ -570,6 +575,8 @@ class HandlerPipeline:
                 },
             )
             await self._update_thread_last_event(thread_id, error_now)
+
+            raise HandlerError(str(e), original=e) from e
 
     async def _broadcast(self, worker_id: str, payload: dict) -> None:
         if self._broadcast_callback:

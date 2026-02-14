@@ -20,20 +20,17 @@ client = genai.Client(
 )
 
 
-async def vertex_agent(on, send, memory, analytics, settings):
+async def vertex_agent(incoming, send, memory, analytics, settings):
     yield send.run_start(agent_id="vertex-gemini")
 
-    history = await memory.get_history(limit=20)
+    # get_history() returns formatted dicts — use google format for Vertex
+    history = await memory.get_history(limit=20, format="google")
 
     contents = []
-    for event in history:
-        if event.type == "message" and event.content:
-            text = " ".join(part.text for part in event.content if hasattr(part, "text"))
-            if text:
-                role = "user" if event.actor == "user" else "model"
-                contents.append(types.Content(role=role, parts=[types.Part.from_text(text)]))
+    for msg in history:
+        contents.append(types.Content(role=msg["role"], parts=[types.Part.from_text(msg["parts"][0]["text"])]))
 
-    contents.append(types.Content(role="user", parts=[types.Part.from_text(on.message)]))
+    contents.append(types.Content(role="user", parts=[types.Part.from_text(incoming.message)]))
 
     result = await client.aio.models.generate_content(
         model="gemini-2.5-flash",
@@ -44,7 +41,7 @@ async def vertex_agent(on, send, memory, analytics, settings):
     )
 
     yield send.text(result.text)
-    yield send.update_thread(title=on.message[:60])
+    yield send.update_thread(title=incoming.message[:60])
     yield send.run_end()
 
 

@@ -1,7 +1,7 @@
 # Dispatch: Multiple Entry Points for WorkerServer
 
 **Date**: 2026-02-12
-**Status**: Draft
+**Status**: Implemented
 
 ## Problem
 
@@ -157,6 +157,8 @@ These are kept separate from `repository()` because they have behavior beyond ra
 Infrastructure failures — database down, invalid arguments. Raised directly to the caller. No thread created, no events broadcast.
 
 ```python
+from dooers import DispatchError
+
 try:
     stream = await worker_server.dispatch(...)
 except DispatchError as e:
@@ -174,12 +176,15 @@ Agent failures — LLM timeout, tool crash, unhandled exception. The pipeline ha
 5. Re-raises to the caller
 
 ```python
+from dooers import HandlerError
+
 try:
     async for event in stream:
         ...
 except HandlerError as e:
     # Thread is already in a clean state (error event persisted, run marked failed)
     # WS subscribers already see the error
+    # e.original contains the original exception
     await whatsapp_api.send(phone, "Sorry, something went wrong.")
 ```
 
@@ -195,7 +200,7 @@ The handler execution logic is extracted from `Router._handle_event_create()` in
 │                                                             │
 │  1. Get or create thread -> persist + broadcast             │
 │  2. Create user event -> persist + broadcast                │
-│  3. Build context (on, send, memory, analytics, settings)   │
+│  3. Build context (incoming, send, memory, analytics, settings) │
 │  4. Iterate handler -> for each yielded event:              │
 │     - persist to DB                                         │
 │     - broadcast to WS subscribers                           │
@@ -235,23 +240,23 @@ worker_server = WorkerServer(
 
 # ─── Handler definitions ───
 
-async def run_main_agent(on, send, memory, analytics, settings):
+async def run_main_agent(incoming, send, memory, analytics, settings):
     yield send.run_start()
     history = await memory.get_history(limit=20, format="openai")
-    response = await openai_chat(history, on.message)
+    response = await openai_chat(history, incoming.message)
     yield send.text(response)
     yield send.run_end()
 
-async def run_whatsapp_agent(on, send, memory, analytics, settings):
+async def run_whatsapp_agent(incoming, send, memory, analytics, settings):
     yield send.run_start()
     history = await memory.get_history(limit=20, format="anthropic")
-    response = await anthropic_chat(history, on.message)
+    response = await anthropic_chat(history, incoming.message)
     yield send.text(response)
     yield send.run_end()
 
-async def run_payment_notification(on, send, memory, analytics, settings):
+async def run_payment_notification(incoming, send, memory, analytics, settings):
     yield send.run_start()
-    yield send.text(on.message)
+    yield send.text(incoming.message)
     yield send.run_end()
 
 # ─── WebSocket entry point (existing) ───
@@ -295,7 +300,7 @@ async def whatsapp_webhook(payload: dict):
 
     # Stream handler events, forward text replies to WhatsApp
     async for event in stream:
-        if event.type == "text":
+        if event.send_type == "text":
             await whatsapp_api.send(payload["phone"], event.data["text"])
 
 @app.post("/webhook/stripe")

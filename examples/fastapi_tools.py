@@ -24,17 +24,14 @@ async def search_web(query: str) -> dict:
         return resp.json()
 
 
-async def tool_agent(on, send, memory, analytics, settings):
+async def tool_agent(incoming, send, memory, analytics, settings):
     yield send.run_start(agent_id="tool-agent")
 
-    if on.message.lower().startswith("search "):
-        query = on.message[7:]
+    if incoming.message.lower().startswith("search "):
+        query = incoming.message[7:]
         args = {"query": query}
-
-        # Generate correlation ID for tool call/result pairing
         call_id = str(uuid.uuid4())
 
-        # Emit tool call with display_name for frontend rendering
         yield send.tool_call(
             "web_search",
             args,
@@ -44,11 +41,10 @@ async def tool_agent(on, send, memory, analytics, settings):
 
         results = await search_web(query)
 
-        # Emit tool result with same ID for correlation
         yield send.tool_result(
             "web_search",
             {"results": results},
-            args=args,  # Echo args for self-contained rendering
+            args=args,
             id=call_id,
         )
 
@@ -59,7 +55,7 @@ async def tool_agent(on, send, memory, analytics, settings):
     else:
         yield send.text("Try: search <query>")
 
-    yield send.update_thread(title=on.message[:60])
+    yield send.update_thread(title=incoming.message[:60])
     yield send.run_end()
 
 

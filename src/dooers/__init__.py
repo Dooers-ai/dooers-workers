@@ -1,6 +1,7 @@
 from dooers.broadcast import BroadcastManager
 from dooers.config import WorkerConfig
 from dooers.dispatch import DispatchStream
+from dooers.exceptions import DispatchError, HandlerError
 from dooers.features.analytics import (
     AnalyticsBatch,
     AnalyticsCollector,
@@ -18,8 +19,9 @@ from dooers.features.settings import (
     SettingsSelectOption,
     WorkerSettings,
 )
+from dooers.handlers.context import WorkerContext
+from dooers.handlers.incoming import WorkerIncoming
 from dooers.handlers.memory import WorkerMemory
-from dooers.handlers.on import WorkerOn
 from dooers.handlers.pipeline import Handler
 from dooers.handlers.send import WorkerSend
 from dooers.persistence.base import Persistence
@@ -43,14 +45,17 @@ __all__ = [
     # Core
     "WorkerConfig",
     "WorkerServer",
+    "WorkerContext",
+    "WorkerIncoming",
     "WorkerSend",
     "WorkerMemory",
-    "WorkerOn",
     "ConnectionRegistry",
     "BroadcastManager",
     "Persistence",
     # Dispatch
     "DispatchStream",
+    "DispatchError",
+    "HandlerError",
     "Handler",
     # Repository
     "Repository",

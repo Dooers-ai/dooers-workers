@@ -14,7 +14,6 @@ from dooers import (
 
 app = FastAPI()
 
-# Define settings schema for this worker
 settings_schema = SettingsSchema(
     fields=[
         SettingsField(
@@ -56,22 +55,20 @@ worker_server = WorkerServer(
 client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 
-async def anthropic_agent(on, send, memory, analytics, settings):
+async def anthropic_agent(incoming, send, memory, analytics, settings):
     yield send.run_start(agent_id="anthropic-claude")
 
-    # Get settings
     model = await settings.get("model")
     max_tokens = await settings.get("max_tokens")
     system_prompt = await settings.get("system_prompt")
 
-    # Track custom event
     await analytics.track("llm.request", data={"model": model})
 
-    # Get formatted history (Anthropic uses same format as OpenAI)
+    # get_history() returns messages formatted for the LLM provider
     history = await memory.get_history(limit=20, format="anthropic")
 
     messages = list(history)
-    messages.append({"role": "user", "content": on.message})
+    messages.append({"role": "user", "content": incoming.message})
 
     result = await client.messages.create(
         model=model,
@@ -80,7 +77,6 @@ async def anthropic_agent(on, send, memory, analytics, settings):
         messages=messages,
     )
 
-    # Track token usage
     await analytics.track(
         "llm.response",
         data={
@@ -91,7 +87,7 @@ async def anthropic_agent(on, send, memory, analytics, settings):
     )
 
     yield send.text(result.content[0].text)
-    yield send.update_thread(title=on.message[:60])
+    yield send.update_thread(title=incoming.message[:60])
     yield send.run_end()
 
 
