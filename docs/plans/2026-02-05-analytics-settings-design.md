@@ -6,7 +6,7 @@
 
 ## Overview
 
-Two new features for the dooers-workers:
+Two new features for the workers-server:
 
 1. **Analytics System** — Usage tracking, feedback (likes/dislikes), real-time dashboard via WebSocket
 2. **Dynamic Settings System** — Real-time configurable agent settings with bidirectional sync

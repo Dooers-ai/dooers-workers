@@ -1,11 +1,11 @@
-# dooers-workers
+# workers-server
 
 Python SDK for building AI agent workers on the dooers.ai platform.
 
 ## Install
 
 ```bash
-pip install dooers-workers
+pip install dooers-workers-server
 ```
 
 ## How It Works
@@ -414,7 +414,7 @@ worker_server = WorkerServer(WorkerConfig(
 
 ### Azure Cosmos DB
 
-Requires the cosmos extra: `pip install dooers-workers[cosmos]`
+Requires the cosmos extra: `pip install dooers-workers-server[cosmos]`
 
 ```python
 worker_server = WorkerServer(WorkerConfig(

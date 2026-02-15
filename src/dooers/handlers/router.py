@@ -14,6 +14,7 @@ from dooers.protocol.frames import (
     C2S_AnalyticsUnsubscribe,
     C2S_Connect,
     C2S_EventCreate,
+    C2S_EventList,
     C2S_Feedback,
     C2S_SettingsPatch,
     C2S_SettingsSubscribe,
@@ -24,10 +25,12 @@ from dooers.protocol.frames import (
     C2S_ThreadUnsubscribe,
     ClientToServer,
     EventAppendPayload,
+    EventListResultPayload,
     FeedbackAckPayload,
     RunUpsertPayload,
     S2C_Ack,
     S2C_EventAppend,
+    S2C_EventListResult,
     S2C_FeedbackAck,
     S2C_RunUpsert,
     S2C_ThreadDeleted,
@@ -40,6 +43,7 @@ from dooers.protocol.frames import (
     ThreadSnapshotPayload,
     ThreadUpsertPayload,
 )
+from dooers.protocol.models import Metadata
 from dooers.protocol.parser import serialize_frame
 from dooers.registry import ConnectionRegistry
 
@@ -96,12 +100,7 @@ class Router:
         self._ws: WebSocketProtocol | None = None
         self._ws_id: str = _generate_id()
         self._worker_id: str | None = None
-        self._organization_id: str | None = None
-        self._workspace_id: str | None = None
-        self._user_id: str | None = None
-        self._user_name: str | None = None
-        self._user_email: str | None = None
-        self._user_role: str | None = None
+        self._metadata: Metadata | None = None
         self._subscribed_threads: set[str] = set()
 
         self._pipeline = HandlerPipeline(
@@ -186,6 +185,8 @@ class Router:
                 await self._handle_thread_delete(ws, frame)
             case C2S_EventCreate():
                 await self._handle_event_create(ws, frame)
+            case C2S_EventList():
+                await self._handle_event_list(ws, frame)
 
             case C2S_AnalyticsSubscribe():
                 await self._handle_analytics_subscribe(ws, frame)
@@ -227,12 +228,7 @@ class Router:
 
     async def _handle_connect(self, ws: WebSocketProtocol, frame: C2S_Connect) -> None:
         self._worker_id = frame.payload.worker_id
-        self._organization_id = frame.payload.organization_id
-        self._workspace_id = frame.payload.workspace_id
-        self._user_id = frame.payload.user_id
-        self._user_name = frame.payload.user_name
-        self._user_email = frame.payload.user_email
-        self._user_role = frame.payload.user_role
+        self._metadata = frame.payload.metadata
         self._ws = ws
 
         await self._registry.register(self._worker_id, ws)
@@ -251,17 +247,40 @@ class Router:
             )
             return
 
+        metadata = self._metadata or Metadata()
+        user_id = metadata.user_id if self._private_threads else None
+        limit = frame.payload.limit or 30
         threads = await self._persistence.list_threads(
             worker_id=self._worker_id,
-            organization_id=self._organization_id or "",
-            workspace_id=self._workspace_id or "",
-            user_id=self._user_id if self._private_threads else None,
+            organization_id=metadata.organization_id,
+            workspace_id=metadata.workspace_id,
+            user_id=user_id,
             cursor=frame.payload.cursor,
-            limit=frame.payload.limit or 30,
+            limit=limit + 1,
         )
+        has_more = len(threads) > limit
+        if has_more:
+            threads = threads[:limit]
+
+        if frame.payload.cursor:
+            total_count = 0
+        else:
+            total_count = await self._persistence.count_threads(
+                worker_id=self._worker_id,
+                organization_id=metadata.organization_id,
+                workspace_id=metadata.workspace_id,
+                user_id=user_id,
+            )
+
+        last = threads[-1] if has_more else None
+        cursor = f"{last.last_event_at.isoformat()}|{last.id}" if last else None
         result = S2C_ThreadListResult(
             id=_generate_id(),
-            payload=ThreadListResultPayload(threads=threads, cursor=None),
+            payload=ThreadListResultPayload(
+                threads=threads,
+                cursor=cursor,
+                total_count=total_count,
+            ),
         )
         await self._send(ws, result)
 
@@ -386,16 +405,12 @@ class Router:
         context = HandlerContext(
             handler=self._handler,
             worker_id=self._worker_id,
-            organization_id=self._organization_id or "",
-            workspace_id=self._workspace_id or "",
             message="",
-            user_id=self._user_id or "",
-            user_name=self._user_name,
-            user_email=self._user_email,
-            user_role=self._user_role,
+            metadata=self._metadata or Metadata(),
             thread_id=frame.payload.thread_id,
             content=content_parts,
             data=frame.payload.event.data,
+            client_event_id=frame.payload.client_event_id,
         )
 
         try:
@@ -428,6 +443,44 @@ class Router:
                 pass
         except HandlerError:
             pass  # Pipeline already handled cleanup (error event, run failure, broadcast)
+
+    async def _handle_event_list(self, ws: WebSocketProtocol, frame: C2S_EventList) -> None:
+        if not self._worker_id:
+            await self._send_ack(
+                ws,
+                frame.id,
+                ok=False,
+                error={"code": "NOT_CONNECTED", "message": "Must connect first"},
+            )
+            return
+
+        payload = frame.payload
+        limit = payload.limit
+        events = await self._persistence.get_events(
+            payload.thread_id,
+            before_event_id=payload.before_event_id,
+            limit=limit + 1,
+            order="desc",
+        )
+
+        has_more = len(events) > limit
+        if has_more:
+            events = events[:limit]
+
+        # Reverse to chronological order
+        events.reverse()
+
+        cursor = events[0].id if events and has_more else None
+        result = S2C_EventListResult(
+            id=_generate_id(),
+            payload=EventListResultPayload(
+                thread_id=payload.thread_id,
+                events=events,
+                cursor=cursor,
+                has_more=has_more,
+            ),
+        )
+        await self._send(ws, result)
 
     async def _handle_analytics_subscribe(
         self,
@@ -499,12 +552,13 @@ class Router:
             return
 
         if self._analytics_collector:
+            metadata = self._metadata or Metadata()
             await self._analytics_collector.feedback(
                 feedback_type=frame.payload.feedback,
                 target_type=frame.payload.target_type,
                 target_id=frame.payload.target_id,
                 worker_id=self._worker_id,
-                user_id=self._user_id,
+                user_id=metadata.user_id,
                 reason=frame.payload.reason,
             )
 
@@ -656,11 +710,12 @@ class Router:
     ) -> None:
         """Track an analytics event if collector is enabled."""
         if self._analytics_collector and self._worker_id:
+            metadata = self._metadata or Metadata()
             await self._analytics_collector.track(
                 event=event,
                 worker_id=self._worker_id,
                 thread_id=thread_id,
-                user_id=self._user_id,
+                user_id=metadata.user_id,
                 run_id=run_id,
                 event_id=event_id,
                 data=data,

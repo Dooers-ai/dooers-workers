@@ -24,6 +24,13 @@ class Persistence(Protocol):
         cursor: str | None,
         limit: int,
     ) -> list[Thread]: ...
+    async def count_threads(
+        self,
+        worker_id: str,
+        organization_id: str,
+        workspace_id: str,
+        user_id: str | None,
+    ) -> int: ...
     async def delete_thread(self, thread_id: str) -> None: ...
     async def create_event(self, event: ThreadEvent) -> None: ...
     async def get_events(
@@ -31,6 +38,7 @@ class Persistence(Protocol):
         thread_id: str,
         *,
         after_event_id: str | None = None,
+        before_event_id: str | None = None,
         limit: int = 50,
         order: EventOrder = "asc",
         filters: dict[str, str] | None = None,

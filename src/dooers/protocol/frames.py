@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 from dooers.features.analytics.models import AnalyticsEventPayload
 from dooers.features.settings.models import SettingsField, SettingsFieldGroup
-from dooers.protocol.models import ContentPart, Run, Thread, ThreadEvent
+from dooers.protocol.models import ContentPart, Metadata, Run, Thread, ThreadEvent
 
 T = TypeVar("T")
 
@@ -18,12 +18,7 @@ class WSFrame(BaseModel, Generic[T]):
 
 class ConnectPayload(BaseModel):
     worker_id: str
-    organization_id: str
-    workspace_id: str
-    user_id: str
-    user_name: str
-    user_email: str
-    user_role: str
+    metadata: Metadata = Metadata()
     auth_token: str | None = None
     client: dict | None = None
 
@@ -128,6 +123,18 @@ class C2S_Feedback(BaseModel):
     payload: FeedbackPayload
 
 
+class EventListPayload(BaseModel):
+    thread_id: str
+    before_event_id: str | None = None
+    limit: int = 50
+
+
+class C2S_EventList(BaseModel):
+    id: str
+    type: Literal["event.list"] = "event.list"
+    payload: EventListPayload
+
+
 class SettingsSubscribePayload(BaseModel):
     worker_id: str
 
@@ -166,6 +173,7 @@ ClientToServer = Annotated[
     | C2S_ThreadUnsubscribe
     | C2S_ThreadDelete
     | C2S_EventCreate
+    | C2S_EventList
     | C2S_AnalyticsSubscribe
     | C2S_AnalyticsUnsubscribe
     | C2S_Feedback
@@ -185,6 +193,7 @@ class AckPayload(BaseModel):
 class ThreadListResultPayload(BaseModel):
     threads: list[Thread]
     cursor: str | None = None
+    total_count: int = 0
 
 
 class ThreadSnapshotPayload(BaseModel):
@@ -234,6 +243,19 @@ class S2C_ThreadUpsert(BaseModel):
     id: str
     type: Literal["thread.upsert"] = "thread.upsert"
     payload: ThreadUpsertPayload
+
+
+class EventListResultPayload(BaseModel):
+    thread_id: str
+    events: list[ThreadEvent]
+    cursor: str | None = None
+    has_more: bool = False
+
+
+class S2C_EventListResult(BaseModel):
+    id: str
+    type: Literal["event.list.result"] = "event.list.result"
+    payload: EventListResultPayload
 
 
 class ThreadDeletedPayload(BaseModel):
@@ -301,6 +323,7 @@ ServerToClient = (
     | S2C_ThreadListResult
     | S2C_ThreadSnapshot
     | S2C_EventAppend
+    | S2C_EventListResult
     | S2C_ThreadUpsert
     | S2C_ThreadDeleted
     | S2C_RunUpsert

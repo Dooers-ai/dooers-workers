@@ -2,7 +2,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from dooers.protocol.models import DocumentPart, ImagePart, Run, TextPart, Thread, ThreadEvent
+from dooers.protocol.models import DocumentPart, ImagePart, Metadata, Run, TextPart, Thread, ThreadEvent
 
 logger = logging.getLogger(__name__)
 
@@ -114,9 +114,9 @@ class CosmosPersistence:
         doc = {
             "id": thread.id,
             "worker_id": thread.worker_id,
-            "organization_id": thread.organization_id,
-            "workspace_id": thread.workspace_id,
-            "user_id": thread.user_id,
+            "organization_id": thread.metadata.organization_id,
+            "workspace_id": thread.metadata.workspace_id,
+            "user_id": thread.metadata.user_id,
             "title": thread.title,
             "created_at": thread.created_at.isoformat(),
             "updated_at": thread.updated_at.isoformat(),
@@ -136,9 +136,11 @@ class CosmosPersistence:
                 return Thread(
                     id=row["id"],
                     worker_id=row["worker_id"],
-                    organization_id=row["organization_id"],
-                    workspace_id=row["workspace_id"],
-                    user_id=row["user_id"],
+                    metadata=Metadata(
+                        organization_id=row["organization_id"],
+                        workspace_id=row["workspace_id"],
+                        user_id=row["user_id"],
+                    ),
                     title=row.get("title"),
                     created_at=datetime.fromisoformat(row["created_at"]),
                     updated_at=datetime.fromisoformat(row["updated_at"]),
@@ -161,9 +163,11 @@ class CosmosPersistence:
         return Thread(
             id=row["id"],
             worker_id=row["worker_id"],
-            organization_id=row["organization_id"],
-            workspace_id=row["workspace_id"],
-            user_id=row["user_id"],
+            metadata=Metadata(
+                organization_id=row["organization_id"],
+                workspace_id=row["workspace_id"],
+                user_id=row["user_id"],
+            ),
             title=row.get("title"),
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
@@ -175,9 +179,9 @@ class CosmosPersistence:
         doc = {
             "id": thread.id,
             "worker_id": thread.worker_id,
-            "organization_id": thread.organization_id,
-            "workspace_id": thread.workspace_id,
-            "user_id": thread.user_id,
+            "organization_id": thread.metadata.organization_id,
+            "workspace_id": thread.metadata.workspace_id,
+            "user_id": thread.metadata.user_id,
             "title": thread.title,
             "created_at": thread.created_at.isoformat(),
             "updated_at": thread.updated_at.isoformat(),
@@ -211,6 +215,43 @@ class CosmosPersistence:
 
         self._thread_worker_cache.pop(thread_id, None)
 
+    async def count_threads(
+        self,
+        worker_id: str,
+        organization_id: str,
+        workspace_id: str,
+        user_id: str | None,
+    ) -> int:
+        container = self._get_container("threads")
+
+        conditions = [
+            "c.worker_id = @worker_id",
+            "c.organization_id = @organization_id",
+            "c.workspace_id = @workspace_id",
+        ]
+        params = [
+            {"name": "@worker_id", "value": worker_id},
+            {"name": "@organization_id", "value": organization_id},
+            {"name": "@workspace_id", "value": workspace_id},
+        ]
+
+        if user_id:
+            conditions.append("c.user_id = @user_id")
+            params.append({"name": "@user_id", "value": user_id})
+
+        where = " AND ".join(conditions)
+        query = f"SELECT VALUE COUNT(1) FROM c WHERE {where}"
+
+        items = [
+            item
+            async for item in container.query_items(
+                query,
+                parameters=params,
+                partition_key=worker_id,
+            )
+        ]
+        return items[0] if items else 0
+
     async def list_threads(
         self,
         worker_id: str,
@@ -238,8 +279,16 @@ class CosmosPersistence:
             params.append({"name": "@user_id", "value": user_id})
 
         if cursor:
-            conditions.append("c.last_event_at < @cursor")
-            params.append({"name": "@cursor", "value": cursor})
+            if "|" in cursor:
+                cursor_ts, cursor_id = cursor.rsplit("|", 1)
+                conditions.append(
+                    "(c.last_event_at < @cursor_ts OR (c.last_event_at = @cursor_ts AND c.id < @cursor_id))"
+                )
+                params.append({"name": "@cursor_ts", "value": cursor_ts})
+                params.append({"name": "@cursor_id", "value": cursor_id})
+            else:
+                conditions.append("c.last_event_at < @cursor")
+                params.append({"name": "@cursor", "value": cursor})
 
         params.append({"name": "@limit", "value": limit})
         where = " AND ".join(conditions)
@@ -264,9 +313,11 @@ class CosmosPersistence:
             Thread(
                 id=row["id"],
                 worker_id=row["worker_id"],
-                organization_id=row["organization_id"],
-                workspace_id=row["workspace_id"],
-                user_id=row["user_id"],
+                metadata=Metadata(
+                    organization_id=row["organization_id"],
+                    workspace_id=row["workspace_id"],
+                    user_id=row["user_id"],
+                ),
                 title=row.get("title"),
                 created_at=datetime.fromisoformat(row["created_at"]),
                 updated_at=datetime.fromisoformat(row["updated_at"]),
@@ -293,9 +344,9 @@ class CosmosPersistence:
             "type": event.type,
             "actor": event.actor,
             "author": event.author,
-            "user_id": event.user_id,
-            "user_name": event.user_name,
-            "user_email": event.user_email,
+            "user_id": event.metadata.user_id or None,
+            "user_name": event.metadata.user_name,
+            "user_email": event.metadata.user_email,
             "content": content_json,
             "data": event.data,
             "created_at": event.created_at.isoformat(),
@@ -307,6 +358,7 @@ class CosmosPersistence:
         thread_id: str,
         *,
         after_event_id: str | None = None,
+        before_event_id: str | None = None,
         limit: int = 50,
         order: str = "asc",
         filters: dict[str, str] | None = None,
@@ -329,6 +381,14 @@ class CosmosPersistence:
                 op = "<" if order == "desc" else ">"
                 conditions.append(f"c.created_at {op} @after_time")
                 params.append({"name": "@after_time", "value": ref_items[0]["created_at"]})
+
+        if before_event_id:
+            ref_query = "SELECT c.created_at FROM c WHERE c.id = @id"
+            ref_params = [{"name": "@id", "value": before_event_id}]
+            ref_items = [item async for item in container.query_items(ref_query, parameters=ref_params)]
+            if ref_items:
+                conditions.append("c.created_at < @before_time")
+                params.append({"name": "@before_time", "value": ref_items[0]["created_at"]})
 
         if filters:
             for key, value in filters.items():
@@ -371,9 +431,11 @@ class CosmosPersistence:
             type=row["type"],
             actor=row["actor"],
             author=row.get("author"),
-            user_id=row.get("user_id"),
-            user_name=row.get("user_name"),
-            user_email=row.get("user_email"),
+            metadata=Metadata(
+                user_id=row.get("user_id") or "",
+                user_name=row.get("user_name"),
+                user_email=row.get("user_email"),
+            ),
             content=content,
             data=row.get("data"),
             created_at=datetime.fromisoformat(row["created_at"]),

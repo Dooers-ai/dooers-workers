@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**dooers-workers** is a Python SDK for building AI agent workers that communicate via WebSocket. It provides real-time message handling, conversation persistence, analytics tracking, and configurable settings for agent services deployed on the dooers.ai platform.
+**workers-server** is a Python SDK for building AI agent workers that communicate via WebSocket. It provides real-time message handling, conversation persistence, analytics tracking, and configurable settings for agent services deployed on the dooers.ai platform.
 
 ## Development Commands
 

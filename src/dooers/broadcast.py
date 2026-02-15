@@ -10,7 +10,7 @@ from dooers.protocol.frames import (
     S2C_ThreadUpsert,
     ThreadUpsertPayload,
 )
-from dooers.protocol.models import Actor, ContentPart, Thread, ThreadEvent
+from dooers.protocol.models import Actor, ContentPart, Metadata, Thread, ThreadEvent
 from dooers.protocol.parser import serialize_frame
 
 if TYPE_CHECKING:
@@ -43,9 +43,7 @@ class BroadcastManager:
         thread_id: str,
         content: list[ContentPart],
         actor: Actor = "system",
-        user_id: str | None = None,
-        user_name: str | None = None,
-        user_email: str | None = None,
+        metadata: Metadata | None = None,
     ) -> tuple[ThreadEvent, int]:
         thread = await self._persistence.get_thread(thread_id)
         if not thread:
@@ -61,9 +59,7 @@ class BroadcastManager:
             run_id=None,
             type="message",
             actor=actor,
-            user_id=user_id,
-            user_name=user_name,
-            user_email=user_email,
+            metadata=metadata or Metadata(),
             content=content,
             data=None,
             created_at=now,
@@ -102,18 +98,14 @@ class BroadcastManager:
     async def create_thread_and_broadcast(
         self,
         worker_id: str,
-        organization_id: str,
-        workspace_id: str,
-        user_id: str,
+        metadata: Metadata | None = None,
         title: str | None = None,
     ) -> tuple[Thread, int]:
         now = _now()
         thread = Thread(
             id=_generate_id(),
             worker_id=worker_id,
-            organization_id=organization_id,
-            workspace_id=workspace_id,
-            user_id=user_id,
+            metadata=metadata or Metadata(),
             title=title,
             created_at=now,
             updated_at=now,

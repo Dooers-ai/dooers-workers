@@ -1,14 +1,14 @@
 [project]
-name = "dooers-workers"
-version = "0.6.0"
-description = "dooers.ai SDK for creating agent workers"
+name = "dooers-workers-server"
+version = "0.1.0"
+description = "workers-server — Python SDK for building AI agent workers"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [
     { name = "dooers.ai", email = "contact@dooers.ai" }
 ]
-keywords = ["ai", "agents", "sdk", "dooers", "workers", "multi-agent"]
+keywords = ["ai", "agents", "sdk", "dooers", "workers", "workers-server", "multi-agent"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -39,8 +39,8 @@ dev = [
 
 [project.urls]
 Homepage = "https://dooers.ai"
-Repository = "https://github.com/Dooers-ai/dooers-workers"
-Documentation = "https://github.com/Dooers-ai/dooers-workers"
+Repository = "https://github.com/Dooers-ai/workers-server"
+Documentation = "https://github.com/Dooers-ai/workers-server"
 
 [build-system]
 requires = ["hatchling"]

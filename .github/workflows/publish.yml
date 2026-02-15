@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/dooers-workers
+      url: https://pypi.org/p/dooers-workers-server
     permissions:
       id-token: write
 

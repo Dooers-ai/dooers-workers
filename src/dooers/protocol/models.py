@@ -36,6 +36,15 @@ ContentPart = Annotated[
 ]
 
 
+class Metadata(BaseModel):
+    organization_id: str = ""
+    workspace_id: str = ""
+    user_id: str = ""
+    user_name: str | None = None
+    user_email: str | None = None
+    user_role: str | None = None
+
+
 class ThreadEvent(BaseModel):
     id: str
     thread_id: str
@@ -43,22 +52,19 @@ class ThreadEvent(BaseModel):
     type: EventType
     actor: Actor
     author: str | None = None
-    user_id: str | None = None
-    user_name: str | None = None
-    user_email: str | None = None
+    metadata: Metadata = Metadata()
     content: list[ContentPart] | None = None
     data: dict | None = None
     created_at: datetime
     streaming: bool | None = None
     finalized: bool | None = None
+    client_event_id: str | None = None
 
 
 class Thread(BaseModel):
     id: str
     worker_id: str
-    organization_id: str
-    workspace_id: str
-    user_id: str
+    metadata: Metadata = Metadata()
     title: str | None = None
     created_at: datetime
     updated_at: datetime

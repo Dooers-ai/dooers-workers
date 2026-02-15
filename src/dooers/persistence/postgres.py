@@ -6,7 +6,7 @@ from typing import Any
 
 import asyncpg
 
-from dooers.protocol.models import DocumentPart, ImagePart, Run, TextPart, Thread, ThreadEvent
+from dooers.protocol.models import DocumentPart, ImagePart, Metadata, Run, TextPart, Thread, ThreadEvent
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +221,16 @@ class PostgresPersistence:
             """)
 
             await conn.execute(f"""
+                CREATE INDEX IF NOT EXISTS idx_{self._prefix}threads_worker_last_event
+                    ON {threads_table}(worker_id, last_event_at DESC)
+            """)
+
+            await conn.execute(f"""
+                CREATE INDEX IF NOT EXISTS idx_{self._prefix}events_thread_created
+                    ON {events_table}(thread_id, created_at)
+            """)
+
+            await conn.execute(f"""
                 CREATE INDEX IF NOT EXISTS idx_{self._prefix}runs_thread_id
                     ON {runs_table}(thread_id)
             """)
@@ -253,9 +263,9 @@ class PostgresPersistence:
                 """,
                 thread.id,
                 thread.worker_id,
-                thread.organization_id,
-                thread.workspace_id,
-                thread.user_id,
+                thread.metadata.organization_id,
+                thread.metadata.workspace_id,
+                thread.metadata.user_id,
                 thread.title,
                 thread.created_at,
                 thread.updated_at,
@@ -279,9 +289,11 @@ class PostgresPersistence:
         return Thread(
             id=row["id"],
             worker_id=row["worker_id"],
-            organization_id=row["organization_id"],
-            workspace_id=row["workspace_id"],
-            user_id=row["user_id"],
+            metadata=Metadata(
+                organization_id=row["organization_id"],
+                workspace_id=row["workspace_id"],
+                user_id=row["user_id"],
+            ),
             title=row["title"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
@@ -300,9 +312,9 @@ class PostgresPersistence:
                 SET organization_id = $1, workspace_id = $2, user_id = $3, title = $4, updated_at = $5, last_event_at = $6
                 WHERE id = $7
                 """,
-                thread.organization_id,
-                thread.workspace_id,
-                thread.user_id,
+                thread.metadata.organization_id,
+                thread.metadata.workspace_id,
+                thread.metadata.user_id,
                 thread.title,
                 thread.updated_at,
                 thread.last_event_at,
@@ -321,6 +333,31 @@ class PostgresPersistence:
             await conn.execute(f"DELETE FROM {events_table} WHERE thread_id = $1", thread_id)
             await conn.execute(f"DELETE FROM {runs_table} WHERE thread_id = $1", thread_id)
             await conn.execute(f"DELETE FROM {threads_table} WHERE id = $1", thread_id)
+
+    async def count_threads(
+        self,
+        worker_id: str,
+        organization_id: str,
+        workspace_id: str,
+        user_id: str | None,
+    ) -> int:
+        if not self._pool:
+            raise RuntimeError("Not connected")
+
+        table = f"{self._prefix}threads"
+        conditions = ["worker_id = $1", "organization_id = $2", "workspace_id = $3"]
+        params: list[Any] = [worker_id, organization_id, workspace_id]
+        idx = 4
+
+        if user_id:
+            conditions.append(f"user_id = ${idx}")
+            params.append(user_id)
+
+        where = " AND ".join(conditions)
+        query = f"SELECT COUNT(*) FROM {table} WHERE {where}"
+
+        async with self._pool.acquire() as conn:
+            return await conn.fetchval(query, *params)
 
     async def list_threads(
         self,
@@ -345,9 +382,18 @@ class PostgresPersistence:
             idx += 1
 
         if cursor:
-            conditions.append(f"last_event_at < ${idx}")
-            params.append(datetime.fromisoformat(cursor))
-            idx += 1
+            if "|" in cursor:
+                cursor_ts, cursor_id = cursor.rsplit("|", 1)
+                conditions.append(
+                    f"(last_event_at < ${idx} OR (last_event_at = ${idx} AND id < ${idx + 1}))"
+                )
+                params.append(datetime.fromisoformat(cursor_ts))
+                params.append(cursor_id)
+                idx += 2
+            else:
+                conditions.append(f"last_event_at < ${idx}")
+                params.append(datetime.fromisoformat(cursor))
+                idx += 1
 
         params.append(limit)
         where = " AND ".join(conditions)
@@ -355,7 +401,7 @@ class PostgresPersistence:
         query = f"""
             SELECT * FROM {table}
             WHERE {where}
-            ORDER BY last_event_at DESC
+            ORDER BY last_event_at DESC, id DESC
             LIMIT ${idx}
         """
 
@@ -366,9 +412,11 @@ class PostgresPersistence:
             Thread(
                 id=row["id"],
                 worker_id=row["worker_id"],
-                organization_id=row["organization_id"],
-                workspace_id=row["workspace_id"],
-                user_id=row["user_id"],
+                metadata=Metadata(
+                    organization_id=row["organization_id"],
+                    workspace_id=row["workspace_id"],
+                    user_id=row["user_id"],
+                ),
                 title=row["title"],
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
@@ -400,9 +448,9 @@ class PostgresPersistence:
                 event.type,
                 event.actor,
                 event.author,
-                event.user_id,
-                event.user_name,
-                event.user_email,
+                event.metadata.user_id or None,
+                event.metadata.user_name,
+                event.metadata.user_email,
                 content_json,
                 data_json,
                 event.created_at,
@@ -413,6 +461,7 @@ class PostgresPersistence:
         thread_id: str,
         *,
         after_event_id: str | None = None,
+        before_event_id: str | None = None,
         limit: int = 50,
         order: str = "asc",
         filters: dict[str, str] | None = None,
@@ -433,6 +482,14 @@ class PostgresPersistence:
             if ref_row:
                 op = "<" if order == "desc" else ">"
                 conditions.append(f"created_at {op} ${idx}")
+                params.append(ref_row["created_at"])
+                idx += 1
+
+        if before_event_id:
+            async with self._pool.acquire() as conn:
+                ref_row = await conn.fetchrow(f"SELECT created_at FROM {table} WHERE id = $1", before_event_id)
+            if ref_row:
+                conditions.append(f"created_at < ${idx}")
                 params.append(ref_row["created_at"])
                 idx += 1
 
@@ -469,9 +526,11 @@ class PostgresPersistence:
             type=row["type"],
             actor=row["actor"],
             author=row.get("author"),
-            user_id=row["user_id"],
-            user_name=row["user_name"],
-            user_email=row["user_email"],
+            metadata=Metadata(
+                user_id=row["user_id"] or "",
+                user_name=row["user_name"],
+                user_email=row["user_email"],
+            ),
             content=content,
             data=data,
             created_at=row["created_at"],

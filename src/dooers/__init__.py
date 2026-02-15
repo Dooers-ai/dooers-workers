@@ -31,6 +31,7 @@ from dooers.protocol.models import (
     DocumentPart,
     EventType,
     ImagePart,
+    Metadata,
     Run,
     RunStatus,
     TextPart,
@@ -60,6 +61,7 @@ __all__ = [
     # Repository
     "Repository",
     # Protocol models
+    "Metadata",
     "ContentPart",
     "TextPart",
     "ImagePart",

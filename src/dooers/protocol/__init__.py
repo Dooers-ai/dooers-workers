@@ -48,6 +48,7 @@ from dooers.protocol.models import (
     DocumentPart,
     EventType,
     ImagePart,
+    Metadata,
     Run,
     RunStatus,
     TextPart,
@@ -58,6 +59,7 @@ from dooers.protocol.parser import parse_frame, serialize_frame
 
 __all__ = [
     # Models
+    "Metadata",
     "ContentPart",
     "TextPart",
     "ImagePart",

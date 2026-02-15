@@ -24,6 +24,7 @@ from dooers.protocol.frames import (
     S2C_ThreadUpsert,
     ThreadUpsertPayload,
 )
+from dooers.protocol.models import Metadata
 from dooers.protocol.parser import parse_frame, serialize_frame
 from dooers.registry import ConnectionRegistry
 from dooers.repository import Repository
@@ -170,13 +171,8 @@ class WorkerServer:
         self,
         handler: Handler,
         worker_id: str,
-        organization_id: str,
-        workspace_id: str,
         message: str,
-        user_id: str,
-        user_name: str | None = None,
-        user_email: str | None = None,
-        user_role: str | None = None,
+        metadata: Metadata | None = None,
         thread_id: str | None = None,
         thread_title: str | None = None,
         content: list | None = None,
@@ -195,13 +191,8 @@ class WorkerServer:
         context = HandlerContext(
             handler=handler,
             worker_id=worker_id,
-            organization_id=organization_id,
-            workspace_id=workspace_id,
             message=message,
-            user_id=user_id,
-            user_name=user_name,
-            user_email=user_email,
-            user_role=user_role,
+            metadata=metadata or Metadata(),
             thread_id=thread_id,
             thread_title=thread_title,
             content=content,

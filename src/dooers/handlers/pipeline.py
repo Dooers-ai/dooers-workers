@@ -19,6 +19,7 @@ from dooers.persistence.base import Persistence
 from dooers.protocol.models import (
     DocumentPart,
     ImagePart,
+    Metadata,
     Run,
     TextPart,
     Thread,
@@ -51,17 +52,17 @@ Handler = Callable[
 class HandlerContext:
     handler: Handler
     worker_id: str
-    organization_id: str
-    workspace_id: str
     message: str
-    user_id: str
-    user_name: str | None = None
-    user_email: str | None = None
-    user_role: str | None = None
+    metadata: Metadata = None  # type: ignore[assignment]
     thread_id: str | None = None
     thread_title: str | None = None
     content: list[Any] | None = None
     data: dict | None = None
+    client_event_id: str | None = None
+
+    def __post_init__(self):
+        if self.metadata is None:
+            self.metadata = Metadata()
 
 
 @dataclass
@@ -98,9 +99,11 @@ class HandlerPipeline:
             thread = Thread(
                 id=thread_id,
                 worker_id=context.worker_id,
-                organization_id=context.organization_id,
-                workspace_id=context.workspace_id,
-                user_id=context.user_id,
+                metadata=Metadata(
+                    organization_id=context.metadata.organization_id,
+                    workspace_id=context.metadata.workspace_id,
+                    user_id=context.metadata.user_id,
+                ),
                 title=context.thread_title,
                 created_at=now,
                 updated_at=now,
@@ -121,7 +124,7 @@ class HandlerPipeline:
                 context.worker_id,
                 AnalyticsEvent.THREAD_CREATED.value,
                 thread_id=thread_id,
-                user_id=context.user_id,
+                user_id=context.metadata.user_id,
             )
         else:
             thread = await self._persistence.get_thread(thread_id)
@@ -133,9 +136,11 @@ class HandlerPipeline:
                 thread = Thread(
                     id=thread_id,
                     worker_id=context.worker_id,
-                    organization_id=context.organization_id,
-                    workspace_id=context.workspace_id,
-                    user_id=context.user_id,
+                    metadata=Metadata(
+                        organization_id=context.metadata.organization_id,
+                        workspace_id=context.metadata.workspace_id,
+                        user_id=context.metadata.user_id,
+                    ),
                     title=context.thread_title,
                     created_at=now,
                     updated_at=now,
@@ -156,7 +161,7 @@ class HandlerPipeline:
                     context.worker_id,
                     AnalyticsEvent.THREAD_CREATED.value,
                     thread_id=thread_id,
-                    user_id=context.user_id,
+                    user_id=context.metadata.user_id,
                 )
 
         content_parts = self._convert_content_parts(context.content) if context.content else [TextPart(text=context.message)]
@@ -168,12 +173,15 @@ class HandlerPipeline:
             run_id=None,
             type="message",
             actor="user",
-            user_id=context.user_id,
-            user_name=context.user_name,
-            user_email=context.user_email,
+            metadata=Metadata(
+                user_id=context.metadata.user_id,
+                user_name=context.metadata.user_name,
+                user_email=context.metadata.user_email,
+            ),
             content=content_parts,
             data=context.data,
             created_at=now,
+            client_event_id=context.client_event_id,
         )
         await self._persistence.create_event(user_event)
 
@@ -190,7 +198,7 @@ class HandlerPipeline:
             context.worker_id,
             AnalyticsEvent.MESSAGE_C2S.value,
             thread_id=thread_id,
-            user_id=context.user_id,
+            user_id=context.metadata.user_id,
             event_id=user_event_id,
         )
 
@@ -212,12 +220,7 @@ class HandlerPipeline:
         worker_context = WorkerContext(
             thread_id=thread_id,
             event_id=result.user_event.id,
-            organization_id=context.organization_id,
-            workspace_id=context.workspace_id,
-            user_id=context.user_id,
-            user_name=context.user_name or "",
-            user_email=context.user_email or "",
-            user_role=context.user_role or "",
+            metadata=context.metadata,
             thread_title=thread.title,
             thread_created_at=thread.created_at,
         )
@@ -232,7 +235,7 @@ class HandlerPipeline:
         analytics = self._create_analytics(
             worker_id=context.worker_id,
             thread_id=thread_id,
-            user_id=context.user_id,
+            user_id=context.metadata.user_id,
         )
 
         settings = self._create_settings(worker_id=context.worker_id)
@@ -290,9 +293,6 @@ class HandlerPipeline:
                         type="message",
                         actor="assistant",
                         author=event.data.get("author") or self._assistant_name,
-                        user_id=None,
-                        user_name=None,
-                        user_email=None,
                         content=[TextPart(text=event.data["text"])],
                         created_at=event_now,
                     )
@@ -309,7 +309,7 @@ class HandlerPipeline:
                         context.worker_id,
                         AnalyticsEvent.MESSAGE_S2C.value,
                         thread_id=thread_id,
-                        user_id=context.user_id,
+                        user_id=context.metadata.user_id,
                         run_id=current_run_id,
                         event_id=event_id,
                         data={"type": "text"},
@@ -324,9 +324,6 @@ class HandlerPipeline:
                         type="message",
                         actor="assistant",
                         author=event.data.get("author") or self._assistant_name,
-                        user_id=None,
-                        user_name=None,
-                        user_email=None,
                         content=[
                             ImagePart(
                                 url=event.data["url"],
@@ -349,7 +346,7 @@ class HandlerPipeline:
                         context.worker_id,
                         AnalyticsEvent.MESSAGE_S2C.value,
                         thread_id=thread_id,
-                        user_id=context.user_id,
+                        user_id=context.metadata.user_id,
                         run_id=current_run_id,
                         event_id=event_id,
                         data={"type": "image"},
@@ -364,9 +361,6 @@ class HandlerPipeline:
                         type="message",
                         actor="assistant",
                         author=event.data.get("author") or self._assistant_name,
-                        user_id=None,
-                        user_name=None,
-                        user_email=None,
                         content=[
                             DocumentPart(
                                 url=event.data["url"],
@@ -389,7 +383,7 @@ class HandlerPipeline:
                         context.worker_id,
                         AnalyticsEvent.MESSAGE_S2C.value,
                         thread_id=thread_id,
-                        user_id=context.user_id,
+                        user_id=context.metadata.user_id,
                         run_id=current_run_id,
                         event_id=event_id,
                         data={"type": "document"},
@@ -403,9 +397,6 @@ class HandlerPipeline:
                         run_id=current_run_id,
                         type="tool.call",
                         actor="assistant",
-                        user_id=None,
-                        user_name=None,
-                        user_email=None,
                         data={
                             "id": event.data["id"],
                             "name": event.data["name"],
@@ -427,7 +418,7 @@ class HandlerPipeline:
                         context.worker_id,
                         AnalyticsEvent.TOOL_CALLED.value,
                         thread_id=thread_id,
-                        user_id=context.user_id,
+                        user_id=context.metadata.user_id,
                         run_id=current_run_id,
                         event_id=event_id,
                         data={"name": event.data["name"]},
@@ -440,9 +431,6 @@ class HandlerPipeline:
                         run_id=current_run_id,
                         type="tool.result",
                         actor="tool",
-                        user_id=None,
-                        user_name=None,
-                        user_email=None,
                         data={
                             "id": event.data.get("id"),
                             "name": event.data["name"],
@@ -470,9 +458,6 @@ class HandlerPipeline:
                         run_id=current_run_id,
                         type="tool.transaction",
                         actor="assistant",
-                        user_id=None,
-                        user_name=None,
-                        user_email=None,
                         data={
                             "id": event.data["id"],
                             "name": event.data["name"],
@@ -495,7 +480,7 @@ class HandlerPipeline:
                         context.worker_id,
                         AnalyticsEvent.TOOL_CALLED.value,
                         thread_id=thread_id,
-                        user_id=context.user_id,
+                        user_id=context.metadata.user_id,
                         run_id=current_run_id,
                         event_id=event_id,
                         data={"name": event.data["name"]},
@@ -528,7 +513,7 @@ class HandlerPipeline:
                 context.worker_id,
                 AnalyticsEvent.ERROR_OCCURRED.value,
                 thread_id=thread_id,
-                user_id=context.user_id,
+                user_id=context.metadata.user_id,
                 run_id=current_run_id,
                 data={"error": str(e), "type": type(e).__name__},
             )
@@ -559,9 +544,6 @@ class HandlerPipeline:
                 run_id=current_run_id,
                 type="message",
                 actor="system",
-                user_id=None,
-                user_name=None,
-                user_email=None,
                 content=[TextPart(text=str(e))],
                 created_at=error_now,
             )

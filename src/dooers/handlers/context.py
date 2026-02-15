@@ -1,26 +1,21 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from dooers.protocol.models import Metadata
+
 
 @dataclass
 class WorkerContext:
     """Contextual metadata for the incoming message.
 
-    Provides "where and who" information:
-    - Where: thread_id, organization_id, workspace_id
-    - Who: user_id, user_name, user_email, user_role
-    - When: thread_created_at
+    Provides "where and who" information via the metadata field,
+    plus thread-specific context.
 
     Always present in handlers and dispatch flows.
     """
 
     thread_id: str
     event_id: str
-    organization_id: str
-    workspace_id: str
-    user_id: str
-    user_name: str
-    user_email: str
-    user_role: str
+    metadata: Metadata = field(default_factory=Metadata)
     thread_title: str | None = field(default=None)
     thread_created_at: datetime | None = field(default=None)

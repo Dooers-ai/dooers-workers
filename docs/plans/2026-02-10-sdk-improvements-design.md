@@ -6,7 +6,7 @@
 
 ## Overview
 
-Four improvements to the dooers-workers SDK:
+Four improvements to the workers-server SDK:
 
 1. Configurable assistant name in WorkerConfig
 2. Author field for display name override on events

@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from dooers.protocol.models import ContentPart, Run, Thread, ThreadEvent
+from dooers.protocol.models import ContentPart, Metadata, Run, Thread, ThreadEvent
 
 if TYPE_CHECKING:
     from dooers.persistence.base import Persistence
@@ -48,18 +48,14 @@ class Repository:
     async def create_thread(
         self,
         worker_id: str,
-        organization_id: str,
-        workspace_id: str,
-        user_id: str,
+        metadata: Metadata | None = None,
         title: str | None = None,
     ) -> Thread:
         now = _now()
         thread = Thread(
             id=_generate_id(),
             worker_id=worker_id,
-            organization_id=organization_id,
-            workspace_id=workspace_id,
-            user_id=user_id,
+            metadata=metadata or Metadata(),
             title=title,
             created_at=now,
             updated_at=now,
@@ -120,9 +116,7 @@ class Repository:
         actor: str,
         content: list[ContentPart] | None = None,
         data: dict | None = None,
-        user_id: str | None = None,
-        user_name: str | None = None,
-        user_email: str | None = None,
+        metadata: Metadata | None = None,
         author: str | None = None,
         run_id: str | None = None,
     ) -> ThreadEvent:
@@ -133,9 +127,7 @@ class Repository:
             type=type,
             actor=actor,
             author=author,
-            user_id=user_id,
-            user_name=user_name,
-            user_email=user_email,
+            metadata=metadata or Metadata(),
             content=content,
             data=data,
             created_at=_now(),

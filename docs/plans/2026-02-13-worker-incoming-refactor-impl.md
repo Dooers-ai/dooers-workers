@@ -741,7 +741,7 @@ Find the main content section and add before the Handler examples:
 ```markdown
 ## Execution Flows
 
-The dooers-workers SDK supports two ways to execute handlers:
+The workers-server SDK supports two ways to execute handlers:
 
 ### WebSocket Handlers (Real-Time)
 When a client connects via WebSocket, incoming messages are automatically routed to registered handlers. The context (thread_id, organization_id, etc.) is automatically extracted from the message.
